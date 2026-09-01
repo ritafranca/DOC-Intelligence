@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="DOC Intelligence — processamento e conferência inteligente de documentos internos." />
+  <title>DOC Intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#0B1628', navy: '#10233F', cyan: '#13B8D1', paper: '#F5F7F8',
+            line: '#DCE3E8', muted: '#667588', amber: '#F4A62A', danger: '#D14D4D'
+          },
+          fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+          boxShadow: { panel: '0 10px 28px rgba(11, 22, 40, .08)' }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #F5F7F8; color: #0B1628; }
+    button, input, select, textarea { font: inherit; }
+    ::selection { background: #13B8D1; color: #07111f; }
+    .drop-grid {
+      background-image: linear-gradient(#dce3e8 1px, transparent 1px), linear-gradient(90deg, #dce3e8 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .scrollbar-thin { scrollbar-color: #9aa8b7 transparent; scrollbar-width: thin; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+    @media (max-width: 900px) {
+      .app-shell { grid-template-columns: 1fr !important; }
+      .sidebar { position: static !important; height: auto !important; }
+      .nav-row { display: grid !important; grid-template-columns: repeat(3, minmax(0,1fr)); }
+      .review-grid { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+    import React, { useCallback, useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@19.1.1';
+    import { createRoot } from 'https://esm.sh/react-dom@19.1.1/client';
+    import htm from 'https://esm.sh/htm@3.1.1';
+    import { UserManager, WebStorageStateStore } from 'https://esm.sh/oidc-client-ts@3.3.0';
+    import {
+      Activity, AlertTriangle, Check, CheckCircle2, ChevronRight, ClipboardCheck,
+      Clock3, FileCheck2, FileImage, FileSearch, Files, Inbox, LoaderCircle, LogIn, LogOut,
+      LockKeyhole, Mail, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Store,
+      UploadCloud, UserRound, X, XCircle
+    } from 'https://esm.sh/lucide-react@0.468.0';
+
+    const html = htm.bind(React.createElement);
+    const TERMINAL = new Set(['COMPLETED', 'NEEDS_REVIEW', 'FAILED']);
+    const STATUS = {
+      PENDING: { label: 'Na fila', className: 'bg-slate-100 text-slate-700 border-slate-200', icon: Clock3 },
+      PROCESSING: { label: 'Processando', className: 'bg-cyan/10 text-cyan-700 border-cyan/30', icon: LoaderCircle },
+      COMPLETED: { label: 'Concluído', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: CheckCircle2 },
+      NEEDS_REVIEW: { label: 'Conferência', className: 'bg-amber-50 text-amber-800 border-amber-200', icon: AlertTriangle },
+      FAILED: { label: 'Falhou', className: 'bg-red-50 text-red-700 border-red-200', icon: XCircle },
+      PURGED: { label: 'Descartado', className: 'bg-slate-100 text-slate-500 border-slate-200', icon: ShieldCheck }
+    };
+
+    function formatDate(value) {
+      if (!value) return '—';
+      return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
+    }
+
+    function formatBytes(value) {
+      if (value < 1024) return `${value} B`;
+      if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+      return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function StatusBadge({ status }) {
+      const item = STATUS[status] || STATUS.PENDING;
+      const Icon = item.icon;
+      return html`<span className=${`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${item.className}`}>
+        <${Icon} size=${13} className=${status === 'PROCESSING' ? 'spin' : ''} />${item.label}
+      </span>`;
+    }
+
+    function apiClient(accessToken, developmentAuth = false) {
+      return async (path, options = {}) => {
+        const headers = new Headers(options.headers || {});
+        if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+        if (developmentAuth) {
+          headers.set('X-Dev-User', 'dev.operator');
+          headers.set('X-Dev-Roles', 'document.submit,document.read,document.review,document.admin');
+        }
+        const response = await fetch(path, { ...options, headers });
+        if (!response.ok) {
+          let message = `Erro ${response.status}`;
+          try { message = (await response.json()).detail || message; } catch (_) {}
+          throw new Error(message);
+        }
+        if (response.status === 204) return null;
+        return response.json();
+      };
+    }
+
+    function Sidebar({ view, setView, principal, onSignOut, reviewCount }) {
+      const canReview = principal.roles.includes('document.review') || principal.roles.includes('document.admin');
+      const nav = [
+        { id: 'upload', label: 'Receber', icon: UploadCloud },
+        ...(canReview ? [{ id: 'review', label: 'Conferir', icon: ClipboardCheck, count: reviewCount }] : []),
+        { id: 'documents', label: 'Documentos', icon: Files }
+      ];
+      return html`<aside className="sidebar sticky top-0 flex h-screen flex-col bg-ink px-5 py-6 text-white">
+        <div className="flex items-center gap-3 border-b border-white/10 pb-6">
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-cyan text-ink"><${FileSearch} size=${24} strokeWidth=${2.3} /></div>
+          <div><div className="text-[10px] font-bold uppercase tracking-[.24em] text-cyan">Operações internas</div><h1 className="text-lg font-semibold">DOC Intelligence</h1></div>
+        </div>
+
+        <nav className="nav-row mt-6 flex flex-col gap-1" aria-label="Navegação principal">
+          ${nav.map(item => html`<button key=${item.id} onClick=${() => setView(item.id)} className=${`flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition ${view === item.id ? 'bg-white text-ink shadow-panel' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
+            <${item.icon} size=${18} /><span className="flex-1">${item.label}</span>
+            ${item.count ? html`<span className="rounded-full bg-amber px-2 py-0.5 text-[11px] font-bold text-ink">${item.count}</span>` : null}
+          </button>`)}
+        </nav>
+
+        <div className="mt-auto space-y-4 border-t border-white/10 pt-5">
+          <div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-full bg-white/10 text-cyan"><${UserRound} size=${17} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${principal.name || principal.email || principal.subject}</div><div className="truncate text-xs text-slate-400">Sessão OIDC individual</div></div></div>
+          <button onClick=${onSignOut} className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan hover:text-white"><${LogOut} size=${14} /> Encerrar sessão</button>
+          <div className="flex items-center gap-2 text-xs text-slate-400"><${ShieldCheck} size=${15} className="text-cyan" /> Ambiente protegido</div>
+        </div>
+      </aside>`;
+    }
+
+    function Metric({ label, value, icon: Icon, accent = 'text-ink' }) {
+      return html`<div className="border-r border-line px-5 last:border-r-0">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.12em] text-muted"><${Icon} size=${15} />${label}</div>
+        <div className=${`text-2xl font-semibold tabular-nums ${accent}`}>${value}</div>
+      </div>`;
+    }
+
+    function UploadView({ api, onUploaded }) {
+      const [files, setFiles] = useState([]);
+      const [channel, setChannel] = useState('whatsapp');
+      const [dragging, setDragging] = useState(false);
+      const inputRef = useRef(null);
+
+      const addFiles = selected => {
+        const valid = [...selected].filter(file => ['image/jpeg', 'image/png', 'application/pdf'].includes(file.type));
+        setFiles(previous => [...previous, ...valid.map(file => ({ file, state: 'ready', message: '' }))]);
+      };
+
+      const uploadAll = async () => {
+        for (let index = 0; index < files.length; index++) {
+          if (files[index].state !== 'ready' && files[index].state !== 'error') continue;
+          setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'uploading', message: '' } : item));
+          const data = new FormData();
+          data.append('file', files[index].file);
+          data.append('source_channel', channel);
+          try {
+            const result = await api('/api/v1/documents', { method: 'POST', body: data });
+            setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'done', message: result.message, document: result.document, duplicate: result.duplicate } : item));
+            onUploaded();
+          } catch (error) {
+            setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'error', message: error.message } : item));
+          }
+        }
+      };
+
+      return html`<section className="mx-auto max-w-5xl">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
+          <div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Nova entrada</p><h2 className="text-3xl font-semibold tracking-tight">Receber documentos</h2><p className="mt-2 text-sm text-muted">O conteúdo é validado, deduplicado e processado fora da requisição.</p></div>
+          <label className="text-sm font-medium text-muted">Canal de origem
+            <select value=${channel} onChange=${e => setChannel(e.target.value)} className="ml-3 rounded-lg border border-line bg-white px-3 py-2 text-ink outline-none focus:border-cyan">
+              <option value="whatsapp">WhatsApp</option><option value="email">E-mail</option><option value="balcao">Balcão</option><option value="internal">Sistema interno</option>
+            </select>
+          </label>
+        </div>
+
+        <div onDragOver=${e => { e.preventDefault(); setDragging(true); }} onDragLeave=${() => setDragging(false)} onDrop=${e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} className=${`drop-grid rounded-xl border-2 border-dashed bg-white p-10 text-center transition ${dragging ? 'border-cyan bg-cyan/5' : 'border-slate-300'}`}>
+          <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-cyan/10 text-cyan-700"><${UploadCloud} size=${27} /></div>
+          <h3 className="text-lg font-semibold">Arraste JPEG, PNG ou PDF</h3>
+          <p className="mt-1 text-sm text-muted">Até 20 MB por arquivo. PDFs com no máximo 40 páginas.</p>
+          <button onClick=${() => inputRef.current?.click()} className="mt-5 rounded-lg bg-ink px-5 py-2.5 text-sm font-semibold text-white hover:bg-navy focus:outline-none focus:ring-2 focus:ring-cyan focus:ring-offset-2">Selecionar arquivos</button>
+          <input ref=${inputRef} type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange=${e => addFiles(e.target.files)} />
+        </div>
+
+        ${files.length ? html`<div className="mt-6 overflow-hidden rounded-xl border border-line bg-white shadow-panel">
+          <div className="flex items-center justify-between border-b border-line px-5 py-4"><h3 className="font-semibold">Lote atual <span className="ml-2 text-sm font-normal text-muted">${files.length} arquivo(s)</span></h3><button onClick=${uploadAll} disabled=${!files.some(item => item.state === 'ready' || item.state === 'error')} className="rounded-lg bg-cyan px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-40">Enviar lote</button></div>
+          <div className="divide-y divide-line">
+            ${files.map((item, index) => html`<div key=${item.file.name + index} className="flex items-center gap-4 px-5 py-4">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-slate-100 text-muted"><${item.file.type === 'application/pdf' ? Files : FileImage} size=${20} /></div>
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${item.file.name}</div><div className=${`mt-1 text-xs ${item.state === 'error' ? 'text-danger' : 'text-muted'}`}>${item.message || formatBytes(item.file.size)}</div></div>
+              ${item.state === 'ready' ? html`<button aria-label="Remover arquivo" onClick=${() => setFiles(current => current.filter((_, i) => i !== index))} className="rounded-md p-2 text-muted hover:bg-slate-100"><${X} size=${17} /></button>` : null}
+              ${item.state === 'uploading' ? html`<${LoaderCircle} className="spin text-cyan" size=${20} />` : null}
+              ${item.state === 'done' ? html`<div className="flex items-center gap-2"><${item.duplicate ? RotateCcw : Check} className="text-emerald-600" size=${19} /><${StatusBadge} status=${item.document.status} /></div>` : null}
+              ${item.state === 'error' ? html`<${XCircle} className="text-danger" size=${20} />` : null}
+            </div>`)}
+          </div>
+        </div>` : null}
+      </section>`;
+    }
+
+    function useDocumentBlob(authHeaders, document) {
+      const [url, setUrl] = useState(null);
+      const [error, setError] = useState(null);
+      useEffect(() => {
+        if (!document) return;
+        let active = true;
+        let objectUrl;
+        fetch(`/api/v1/documents/${document.id}/content`, { headers: authHeaders })
+          .then(response => { if (!response.ok) throw new Error('Não foi possível abrir o documento.'); return response.blob(); })
+          .then(blob => { if (active) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); } })
+          .catch(err => active && setError(err.message));
+        return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+      }, [authHeaders.Authorization, authHeaders['X-Dev-User'], document?.id]);
+      return { url, error };
+    }
+
+    function ReviewView({ api, authHeaders, principal, onChanged }) {
+      const [document, setDocument] = useState(null);
+      const [fields, setFields] = useState({});
+      const [docType, setDocType] = useState('');
+      const [suggested, setSuggested] = useState('');
+      const [notes, setNotes] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState('');
+      const { url, error: previewError } = useDocumentBlob(authHeaders, document);
+
+      const claim = useCallback(async () => {
+        setBusy(true); setMessage('');
+        try {
+          const next = await api('/api/v1/review/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          setDocument(next);
+          if (next) { setFields(next.extracted_data || {}); setDocType(next.document_type || ''); setSuggested(next.filename_suggested || next.filename_original); setNotes(''); }
+          else setMessage('Nenhum documento disponível para conferência.');
+          onChanged();
+        } catch (err) { setMessage(err.message); }
+        finally { setBusy(false); }
+      }, [api]);
+
+      useEffect(() => { claim(); }, []);
+      useEffect(() => {
+        if (!document) return;
+        const timer = setInterval(() => api(`/api/v1/review/${document.id}/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => setMessage('A reserva expirou. Recarregue a fila.')), 120000);
+        return () => clearInterval(timer);
+      }, [document?.id]);
+
+      const submit = async decision => {
+        if (!document) return;
+        setBusy(true); setMessage('');
+        try {
+          await api(`/api/v1/review/${document.id}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, document_type: docType, filename_suggested: suggested, extracted_data: fields, notes: notes || null }) });
+          setDocument(null); onChanged(); await claim();
+        } catch (err) { setMessage(err.message); }
+        finally { setBusy(false); }
+      };
+
+      if (!document) return html`<section className="grid min-h-[65vh] place-items-center"><div className="max-w-md text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white text-cyan shadow-panel"><${Inbox} size=${30} /></div><h2 className="text-2xl font-semibold">Fila de conferência</h2><p className="mt-2 text-sm text-muted">${message || 'Buscando o próximo item disponível…'}</p><button onClick=${claim} disabled=${busy} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-ink px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><${busy ? LoaderCircle : RefreshCw} className=${busy ? 'spin' : ''} size=${17} /> Buscar próximo</button></div></section>`;
+
+      return html`<section>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-amber-700">Conferência humana</p><h2 className="mt-1 text-2xl font-semibold">Validar extração</h2></div><div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"><${LockKeyhole} size=${15} /> Reservado para ${principal.name || principal.email || principal.subject}</div></div>
+        ${message ? html`<div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">${message}</div>` : null}
+        <div className="review-grid grid min-h-[650px] grid-cols-[1.15fr_.85fr] overflow-hidden rounded-xl border border-line bg-white shadow-panel">
+          <div className="flex min-h-[580px] flex-col border-r border-line bg-slate-200">
+            <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3"><div className="flex min-w-0 items-center gap-2"><${FileImage} size=${17} className="text-muted" /><span className="truncate text-sm font-semibold">${document.filename_original}</span></div><span className="text-xs text-muted">${formatBytes(document.size_bytes)}</span></div>
+            <div className="grid flex-1 place-items-center overflow-hidden p-5">
+              ${previewError ? html`<div className="text-sm text-danger">${previewError}</div>` : !url ? html`<${LoaderCircle} className="spin text-cyan" size=${28} />` : document.mime_type === 'application/pdf' ? html`<iframe title="Documento PDF" src=${url} className="h-full min-h-[560px] w-full rounded-md bg-white"></iframe>` : html`<img src=${url} alt="Documento em conferência" className="max-h-[600px] max-w-full rounded-md bg-white object-contain shadow-panel" />`}
+            </div>
+          </div>
+          <div className="scrollbar-thin overflow-y-auto p-6">
+            <div className="mb-6 flex items-center justify-between border-b border-line pb-5"><div><div className="text-xs font-semibold uppercase tracking-[.14em] text-muted">Confiança do modelo</div><div className="mt-1 text-3xl font-semibold text-amber-700">${Math.round(document.confidence_score * 100)}%</div></div><${StatusBadge} status=${document.status} /></div>
+            <label className="mb-4 block text-sm font-semibold">Tipo do documento<input value=${docType} onInput=${e => setDocType(e.target.value)} className="mt-1.5 w-full rounded-lg border border-line px-3 py-2.5 font-normal outline-none focus:border-cyan focus:ring-2 focus:ring-cyan/15" /></label>
+            <label className="mb-5 block text-sm font-semibold">Nome padronizado<input value=${suggested} onInput=${e => setSuggested(e.target.value)} className="mt-1.5 w-full rounded-lg border border-line px-3 py-2.5 font-normal outline-none focus:border-cyan focus:ring-2 focus:ring-cyan/15" /></label>
+            <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Campos extraídos</h3><button onClick=${() => setFields(current => ({ ...current, [`campo_${Object.keys(current).length + 1}`]: '' }))} className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-700"><${Plus} size=${14} /> Campo</button></div>
+            <div className="space-y-3">
+              ${Object.entries(fields).map(([key, value]) => html`<div key=${key} className="grid grid-cols-[120px_1fr_32px] items-center gap-2"><label className="truncate text-xs font-medium text-muted" title=${key}>${key.replaceAll('_', ' ')}</label><input value=${value ?? ''} onInput=${e => setFields(current => ({ ...current, [key]: e.target.value || null }))} className="w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-cyan" /><button aria-label=${`Remover ${key}`} onClick=${() => setFields(current => Object.fromEntries(Object.entries(current).filter(([name]) => name !== key)))} className="rounded-md p-1.5 text-muted hover:bg-red-50 hover:text-danger"><${X} size=${15} /></button></div>`)}
+            </div>
+            <label className="mt-5 block text-sm font-semibold">Observação<textarea value=${notes} onInput=${e => setNotes(e.target.value)} rows="3" placeholder="Opcional" className="mt-1.5 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm font-normal outline-none focus:border-cyan"></textarea></label>
+            <div className="mt-6 grid grid-cols-[.65fr_1.35fr] gap-3"><button onClick=${() => submit('REJECT')} disabled=${busy} className="rounded-lg border border-red-200 px-4 py-2.5 text-sm font-semibold text-danger hover:bg-red-50 disabled:opacity-40">Rejeitar</button><button onClick=${() => submit('APPROVE')} disabled=${busy || !docType || !suggested} className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan px-4 py-2.5 text-sm font-bold text-ink hover:bg-cyan/80 disabled:opacity-40"><${FileCheck2} size=${17} /> Aprovar e próximo</button></div>
+          </div>
+        </div>
+      </section>`;
+    }
+
+    function DocumentsView({ documents, loading, api, refresh }) {
+      const [query, setQuery] = useState('');
+      const [status, setStatus] = useState('ALL');
+      const filtered = useMemo(() => documents.filter(doc => (status === 'ALL' || doc.status === status) && `${doc.filename_original} ${doc.document_type || ''}`.toLowerCase().includes(query.toLowerCase())), [documents, query, status]);
+      const retry = async id => { try { await api(`/api/v1/documents/${id}/retry`, { method: 'POST' }); refresh(); } catch (error) { alert(error.message); } };
+      return html`<section>
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Acervo operacional</p><h2 className="text-3xl font-semibold tracking-tight">Documentos processados</h2></div><button onClick=${refresh} className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold hover:border-cyan"><${RefreshCw} size=${16} className=${loading ? 'spin' : ''} /> Atualizar</button></div>
+        <div className="mb-4 flex flex-wrap gap-3"><label className="relative min-w-[280px] flex-1"><${Search} size=${17} className="absolute left-3 top-2.5 text-muted" /><input value=${query} onInput=${e => setQuery(e.target.value)} placeholder="Buscar por nome ou tipo" className="w-full rounded-lg border border-line bg-white py-2 pl-10 pr-3 text-sm outline-none focus:border-cyan" /></label><select value=${status} onChange=${e => setStatus(e.target.value)} className="rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-cyan"><option value="ALL">Todos os status</option>${Object.entries(STATUS).map(([value, item]) => html`<option value=${value}>${item.label}</option>`)}</select></div>
+        <div className="overflow-x-auto rounded-xl border border-line bg-white shadow-panel"><table className="w-full min-w-[820px] border-collapse text-left"><thead><tr className="border-b border-line bg-slate-50 text-xs font-bold uppercase tracking-[.1em] text-muted"><th className="px-5 py-3.5">Documento</th><th className="px-4 py-3.5">Origem</th><th className="px-4 py-3.5">Tipo</th><th className="px-4 py-3.5">Confiança</th><th className="px-4 py-3.5">Status</th><th className="px-4 py-3.5">Recebido</th><th className="w-12"></th></tr></thead><tbody className="divide-y divide-line">
+          ${filtered.length ? filtered.map(doc => html`<tr key=${doc.id} className="hover:bg-slate-50"><td className="px-5 py-4"><div className="max-w-[260px] truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 max-w-[260px] truncate text-xs text-muted">${doc.filename_original} · ${formatBytes(doc.size_bytes)}</div></td><td className="px-4 py-4 text-sm capitalize text-muted">${doc.source_channel}</td><td className="px-4 py-4 text-sm">${doc.document_type || '—'}</td><td className="px-4 py-4 text-sm font-semibold tabular-nums">${doc.confidence_score ? `${Math.round(doc.confidence_score * 100)}%` : '—'}</td><td className="px-4 py-4"><${StatusBadge} status=${doc.status} /></td><td className="px-4 py-4 text-xs text-muted">${formatDate(doc.created_at)}</td><td className="px-4 py-4">${doc.status === 'FAILED' ? html`<button title="Tentar novamente" onClick=${() => retry(doc.id)} className="rounded-md p-2 text-muted hover:bg-cyan/10 hover:text-cyan-700"><${RotateCcw} size=${16} /></button>` : html`<${ChevronRight} size=${16} className="text-slate-300" />`}</td></tr>`) : html`<tr><td colSpan="7" className="px-5 py-14 text-center text-sm text-muted">Nenhum documento corresponde aos filtros.</td></tr>`}
+        </tbody></table></div>
+      </section>`;
+    }
+
+    function SignInGate({ loading, error, onSignIn }) {
+      return html`<main className="grid min-h-screen place-items-center bg-paper p-6"><section className="w-full max-w-md rounded-xl border border-line bg-white p-8 text-center shadow-panel"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-xl bg-cyan text-ink"><${ShieldCheck} size=${27} /></div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-700">Acesso corporativo</p><h1 className="mt-2 text-2xl font-semibold">DOC Intelligence</h1><p className="mt-3 text-sm leading-6 text-muted">Entre com sua identidade individual. As permissões de recebimento, leitura, conferência e administração são aplicadas pela API.</p>${error ? html`<div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-danger">${error}</div>` : null}<button onClick=${onSignIn} disabled=${loading} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-ink px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"><${loading ? LoaderCircle : LogIn} className=${loading ? 'spin' : ''} size=${18} /> ${loading ? 'Validando sessão…' : 'Entrar com OIDC'}</button></section></main>`;
+    }
+
+    function App() {
+      const [view, setView] = useState('upload');
+      const [authConfig, setAuthConfig] = useState(null);
+      const [manager, setManager] = useState(null);
+      const [principal, setPrincipal] = useState(null);
+      const [accessToken, setAccessToken] = useState(null);
+      const [authLoading, setAuthLoading] = useState(true);
+      const [authError, setAuthError] = useState('');
+      const [documents, setDocuments] = useState([]);
+      const [summary, setSummary] = useState({ waiting: 0, claimed: 0 });
+      const [loading, setLoading] = useState(false);
+      const [serviceError, setServiceError] = useState('');
+      const developmentAuth = Boolean(authConfig?.auth_disabled);
+      const api = useMemo(() => apiClient(accessToken, developmentAuth), [accessToken, developmentAuth]);
+      const authHeaders = useMemo(() => accessToken ? { Authorization: `Bearer ${accessToken}` } : developmentAuth ? { 'X-Dev-User': 'dev.operator', 'X-Dev-Roles': 'document.submit,document.read,document.review,document.admin' } : {}, [accessToken, developmentAuth]);
+      const canReview = principal?.roles?.some(role => ['document.review', 'document.admin'].includes(role));
+
+      useEffect(() => {
+        let active = true;
+        (async () => {
+          try {
+            const config = await fetch('/api/config').then(response => response.json());
+            if (!active) return;
+            setAuthConfig(config);
+            if (config.auth_disabled) {
+              const devApi = apiClient(null, true);
+              setPrincipal(await devApi('/api/v1/me'));
+              return;
+            }
+            const oidc = new UserManager({
+              authority: config.oidc_issuer,
+              client_id: config.oidc_client_id,
+              redirect_uri: `${window.location.origin}/`,
+              post_logout_redirect_uri: `${window.location.origin}/`,
+              response_type: 'code',
+              scope: config.oidc_scopes,
+              automaticSilentRenew: true,
+              userStore: new WebStorageStateStore({ store: window.sessionStorage })
+            });
+            setManager(oidc);
+            let user;
+            if (new URLSearchParams(window.location.search).has('code')) {
+              user = await oidc.signinRedirectCallback();
+              history.replaceState({}, document.title, '/');
+            } else {
+              user = await oidc.getUser();
+            }
+            if (user && !user.expired) {
+              setAccessToken(user.access_token);
+              setPrincipal(await apiClient(user.access_token)('/api/v1/me'));
+            }
+          } catch (error) { if (active) setAuthError(error.message); }
+          finally { if (active) setAuthLoading(false); }
+        })();
+        return () => { active = false; };
+      }, []);
+
+      const signIn = () => manager?.signinRedirect().catch(error => setAuthError(error.message));
+      const signOut = () => authConfig?.auth_disabled ? window.location.reload() : manager?.signoutRedirect();
+
+      const refresh = useCallback(async () => {
+        if (!principal) return;
+        setLoading(true);
+        try {
+          const [list, queue] = await Promise.all([
+            api('/api/v1/documents?limit=200'),
+            canReview ? api('/api/v1/review/summary') : Promise.resolve({ waiting: 0, claimed: 0 })
+          ]);
+          setDocuments(list.items); setSummary(queue); setServiceError('');
+        } catch (error) { setServiceError(error.message); }
+        finally { setLoading(false); }
+      }, [api, principal?.subject, canReview]);
+
+      useEffect(() => { if (!principal) return; refresh(); const timer = setInterval(refresh, 5000); return () => clearInterval(timer); }, [refresh, principal?.subject]);
+      if (!principal) return html`<${SignInGate} loading=${authLoading} error=${authError} onSignIn=${signIn} />`;
+
+      const metrics = {
+        today: documents.filter(doc => new Date(doc.created_at).toDateString() === new Date().toDateString()).length,
+        processing: documents.filter(doc => ['PENDING', 'PROCESSING'].includes(doc.status)).length,
+        completed: documents.filter(doc => doc.status === 'COMPLETED').length
+      };
+
+      return html`<div className="app-shell grid min-h-screen grid-cols-[260px_1fr]">
+        <${Sidebar} view=${view} setView=${setView} principal=${principal} onSignOut=${signOut} reviewCount=${summary.waiting} />
+        <main className="min-w-0">
+          <header className="border-b border-line bg-white px-7 py-4"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-2 text-sm font-medium text-muted"><span className=${`h-2 w-2 rounded-full ${serviceError ? 'bg-danger' : 'bg-emerald-500'}`}></span>${serviceError ? serviceError : 'Serviço operacional'}</div><div className="grid grid-cols-3"><${Metric} label="Hoje" value=${metrics.today} icon=${Activity} /><${Metric} label="Em fluxo" value=${metrics.processing} icon=${Clock3} accent="text-cyan-700" /><${Metric} label="Concluídos" value=${metrics.completed} icon=${CheckCircle2} accent="text-emerald-700" /></div></div></header>
+          <div className="mx-auto max-w-7xl p-7 lg:p-9">
+            ${view === 'upload' ? html`<${UploadView} api=${api} onUploaded=${refresh} />` : null}
+            ${view === 'review' && canReview ? html`<${ReviewView} api=${api} authHeaders=${authHeaders} principal=${principal} onChanged=${refresh} />` : null}
+            ${view === 'documents' ? html`<${DocumentsView} documents=${documents} loading=${loading} api=${api} refresh=${refresh} />` : null}
+          </div>
+        </main>
+      </div>`;
+    }
+
+    createRoot(document.getElementById('root')).render(html`<${App} />`);
+  </script>
+</body>
+</html>

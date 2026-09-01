@@ -1,0 +1,22 @@
+{
+  "version": "golden-v1",
+  "description": "Mantenha as imagens fora do Git em armazenamento controlado e monte-as ao executar.",
+  "cases": [
+    {
+      "id": "caso-001",
+      "file": "../samples/identidade_001.jpg",
+      "mime_type": "image/jpeg",
+      "expected": {
+        "document_type": "RG",
+        "extracted_data": {
+          "nome": "NOME ESPERADO",
+          "filiacao": "FILIACAO ESPERADA",
+          "data_nascimento": "1990-01-31",
+          "numero": "000000000",
+          "orgao_emissor": "SSP"
+        }
+      }
+    }
+  ]
+}
+

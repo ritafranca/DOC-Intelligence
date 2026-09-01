@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: docintelligence
+      POSTGRES_USER: docintelligence
+      POSTGRES_PASSWORD: docintelligence
+    ports: ["5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docintelligence -d docintelligence"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "docintelligence"]
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "docintelligence", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: docintelligence
+      MINIO_ROOT_PASSWORD: docintelligence-secret
+      # Chave estática somente para o ambiente local; produção usa KMS gerenciado.
+      MINIO_KMS_SECRET_KEY: doc-intelligence:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports: ["8080:8080"]
+    volumes: ["./infra/keycloak:/opt/keycloak/data/import:ro"]
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

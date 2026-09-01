@@ -1,0 +1,107 @@
+{
+  "realm": "doc-intelligence",
+  "enabled": true,
+  "displayName": "DOC Intelligence",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      {"name": "document.submit"},
+      {"name": "document.read"},
+      {"name": "document.review"},
+      {"name": "document.admin"}
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "api-audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "doc-intelligence-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "doc-intelligence-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "doc-intelligence-api",
+      "name": "DOC Intelligence API",
+      "enabled": true,
+      "bearerOnly": true,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "doc-intelligence-spa",
+      "name": "DOC Intelligence SPA",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://127.0.0.1:8765/*",
+        "http://localhost:8765/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:8765",
+        "http://localhost:8765"
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "email",
+        "api-audience"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "atendimento",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "atendimento@local",
+      "firstName": "Atendimento",
+      "lastName": "Demo",
+      "credentials": [{"type": "password", "value": "Atendimento123!", "temporary": false}],
+      "realmRoles": ["document.submit", "document.read"]
+    },
+    {
+      "username": "conferente",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "conferente@local",
+      "firstName": "Conferente",
+      "lastName": "Demo",
+      "credentials": [{"type": "password", "value": "Conferente123!", "temporary": false}],
+      "realmRoles": ["document.submit", "document.read", "document.review"]
+    },
+    {
+      "username": "administrador",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "administrador@local",
+      "firstName": "Administrador",
+      "lastName": "Demo",
+      "credentials": [{"type": "password", "value": "Administrador123!", "temporary": false}],
+      "realmRoles": ["document.submit", "document.read", "document.review", "document.admin"]
+    }
+  ]
+}
+
