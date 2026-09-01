@@ -174,7 +174,12 @@ def test_production_foundation_vertical_slice() -> None:
         actions = {event["action"] for event in events.json()}
         assert {"DOCUMENT_RECEIVED", "REVIEW_CLAIMED", "REVIEW_SUBMITTED", "DOCUMENT_PURGED"} <= actions
 
-        assert "DOC Intelligence" in client.get("/").text
+        spa = client.get("/")
+        assert spa.status_code == 200
+        assert "DOC Intelligence" in spa.text
+        assert "Acompanhar processamento" in spa.text
+        assert "Detalhes do documento" in spa.text
+        assert 'type="file" multiple' in spa.text
 
 
 def awaitable_storage_count(client: TestClient) -> int:

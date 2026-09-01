@@ -11,11 +11,11 @@
       theme: {
         extend: {
           colors: {
-            ink: '#0B1628', navy: '#10233F', cyan: '#13B8D1', paper: '#F5F7F8',
-            line: '#DCE3E8', muted: '#667588', amber: '#F4A62A', danger: '#D14D4D'
+            ink: '#101828', navy: '#17324D', cyan: '#20B8CD', paper: '#F4F6F8',
+            line: '#DDE3E8', muted: '#667085', amber: '#F5A524', danger: '#D92D20', mint: '#12B76A'
           },
           fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
-          boxShadow: { panel: '0 10px 28px rgba(11, 22, 40, .08)' }
+          boxShadow: { panel: '0 10px 30px rgba(16, 24, 40, .07)', float: '0 24px 60px rgba(16, 24, 40, .18)' }
         }
       }
     }
@@ -24,6 +24,7 @@
     * { box-sizing: border-box; }
     body { margin: 0; background: #F5F7F8; color: #0B1628; }
     button, input, select, textarea { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
     ::selection { background: #13B8D1; color: #07111f; }
     .drop-grid {
       background-image: linear-gradient(#dce3e8 1px, transparent 1px), linear-gradient(90deg, #dce3e8 1px, transparent 1px);
@@ -31,12 +32,28 @@
     }
     .scrollbar-thin { scrollbar-color: #9aa8b7 transparent; scrollbar-width: thin; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     .spin { animation: spin 1s linear infinite; }
+    .enter { animation: enter .24s ease-out both; }
+    .drawer-enter { animation: slideIn .24s ease-out both; }
+    .focus-ring:focus-visible { outline: 3px solid rgba(32,184,205,.26); outline-offset: 2px; }
+    .document-canvas { background-color: #E8EDF1; background-image: radial-gradient(#CBD5DE 1px, transparent 1px); background-size: 18px 18px; }
     @media (max-width: 900px) {
       .app-shell { grid-template-columns: 1fr !important; }
-      .sidebar { position: static !important; height: auto !important; }
-      .nav-row { display: grid !important; grid-template-columns: repeat(3, minmax(0,1fr)); }
+      .sidebar { position: static !important; height: auto !important; padding: 16px !important; }
+      .nav-row { display: grid !important; grid-template-columns: repeat(4, minmax(0,1fr)); margin-top: 14px !important; }
+      .nav-row button { justify-content: center; padding: 10px 6px !important; }
+      .nav-row button span.nav-label { display: none; }
+      .sidebar-profile { display: none !important; }
       .review-grid { grid-template-columns: 1fr !important; }
+      .review-preview { border-right: 0 !important; border-bottom: 1px solid #DDE3E8; }
+      .desk-metrics { display: none !important; }
+    }
+    @media (max-width: 640px) {
+      .page-pad { padding: 20px 16px !important; }
+      .upload-row { align-items: flex-start !important; }
+      .drawer-panel { width: 100vw !important; }
     }
   </style>
 </head>
@@ -49,14 +66,15 @@
     import htm from 'https://esm.sh/htm@3.1.1';
     import { UserManager, WebStorageStateStore } from 'https://esm.sh/oidc-client-ts@3.3.0';
     import {
-      Activity, AlertTriangle, Check, CheckCircle2, ChevronRight, ClipboardCheck,
-      Clock3, FileCheck2, FileImage, FileSearch, Files, Inbox, LoaderCircle, LogIn, LogOut,
-      LockKeyhole, Mail, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Store,
-      UploadCloud, UserRound, X, XCircle
+      Activity, AlertCircle, AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight,
+      ClipboardCheck, Clock3, Download, ExternalLink, Eye, FileCheck2, FileImage, FileSearch,
+      Files, Filter, Inbox, Layers3, LoaderCircle, LogIn, LogOut, LockKeyhole, Mail, MoreHorizontal,
+      Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, UploadCloud, UserRound,
+      X, XCircle, Zap
     } from 'https://esm.sh/lucide-react@0.468.0';
 
     const html = htm.bind(React.createElement);
-    const TERMINAL = new Set(['COMPLETED', 'NEEDS_REVIEW', 'FAILED']);
+    const TERMINAL = new Set(['COMPLETED', 'NEEDS_REVIEW', 'FAILED', 'PURGED']);
     const STATUS = {
       PENDING: { label: 'Na fila', className: 'bg-slate-100 text-slate-700 border-slate-200', icon: Clock3 },
       PROCESSING: { label: 'Processando', className: 'bg-cyan/10 text-cyan-700 border-cyan/30', icon: LoaderCircle },
@@ -65,6 +83,9 @@
       FAILED: { label: 'Falhou', className: 'bg-red-50 text-red-700 border-red-200', icon: XCircle },
       PURGED: { label: 'Descartado', className: 'bg-slate-100 text-slate-500 border-slate-200', icon: ShieldCheck }
     };
+    const CHANNELS = { whatsapp: 'WhatsApp', email: 'E-mail', balcao: 'Balcão', internal: 'Sistema interno' };
+    const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/png', 'application/pdf']);
+    const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
     function formatDate(value) {
       if (!value) return '—';
@@ -72,9 +93,23 @@
     }
 
     function formatBytes(value) {
+      if (!Number.isFinite(value)) return '—';
       if (value < 1024) return `${value} B`;
       if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
       return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function relativeTime(value) {
+      if (!value) return 'agora';
+      const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+      if (seconds < 60) return 'há instantes';
+      if (seconds < 3600) return `há ${Math.floor(seconds / 60)} min`;
+      if (seconds < 86400) return `há ${Math.floor(seconds / 3600)} h`;
+      return `há ${Math.floor(seconds / 86400)} d`;
+    }
+
+    function fileIcon(mimeType, size = 20) {
+      return mimeType === 'application/pdf' ? html`<${Files} size=${size} />` : html`<${FileImage} size=${size} />`;
     }
 
     function StatusBadge({ status }) {
@@ -104,29 +139,30 @@
       };
     }
 
-    function Sidebar({ view, setView, principal, onSignOut, reviewCount }) {
+    function Sidebar({ view, setView, principal, onSignOut, reviewCount, activeCount }) {
       const canReview = principal.roles.includes('document.review') || principal.roles.includes('document.admin');
       const nav = [
         { id: 'upload', label: 'Receber', icon: UploadCloud },
+        { id: 'monitor', label: 'Acompanhar', icon: Activity, count: activeCount },
         ...(canReview ? [{ id: 'review', label: 'Conferir', icon: ClipboardCheck, count: reviewCount }] : []),
-        { id: 'documents', label: 'Documentos', icon: Files }
+        { id: 'documents', label: 'Acervo', icon: Files }
       ];
-      return html`<aside className="sidebar sticky top-0 flex h-screen flex-col bg-ink px-5 py-6 text-white">
+      return html`<aside className="sidebar sticky top-0 z-20 flex h-screen flex-col bg-ink px-5 py-6 text-white">
         <div className="flex items-center gap-3 border-b border-white/10 pb-6">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-cyan text-ink"><${FileSearch} size=${24} strokeWidth=${2.3} /></div>
-          <div><div className="text-[10px] font-bold uppercase tracking-[.24em] text-cyan">Operações internas</div><h1 className="text-lg font-semibold">DOC Intelligence</h1></div>
+          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-cyan text-ink"><${FileSearch} size=${24} strokeWidth=${2.3} /></div>
+          <div className="min-w-0"><div className="text-[10px] font-bold uppercase tracking-[.24em] text-cyan">Operações internas</div><h1 className="truncate text-lg font-semibold">DOC Intelligence</h1></div>
         </div>
 
         <nav className="nav-row mt-6 flex flex-col gap-1" aria-label="Navegação principal">
-          ${nav.map(item => html`<button key=${item.id} onClick=${() => setView(item.id)} className=${`flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition ${view === item.id ? 'bg-white text-ink shadow-panel' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
-            <${item.icon} size=${18} /><span className="flex-1">${item.label}</span>
+          ${nav.map(item => html`<button type="button" key=${item.id} onClick=${() => setView(item.id)} aria-current=${view === item.id ? 'page' : undefined} className=${`focus-ring relative flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition ${view === item.id ? 'bg-white text-ink shadow-panel' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>
+            <${item.icon} size=${18} /><span className="nav-label flex-1">${item.label}</span>
             ${item.count ? html`<span className="rounded-full bg-amber px-2 py-0.5 text-[11px] font-bold text-ink">${item.count}</span>` : null}
           </button>`)}
         </nav>
 
-        <div className="mt-auto space-y-4 border-t border-white/10 pt-5">
+        <div className="sidebar-profile mt-auto space-y-4 border-t border-white/10 pt-5">
           <div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-full bg-white/10 text-cyan"><${UserRound} size=${17} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${principal.name || principal.email || principal.subject}</div><div className="truncate text-xs text-slate-400">Sessão OIDC individual</div></div></div>
-          <button onClick=${onSignOut} className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan hover:text-white"><${LogOut} size=${14} /> Encerrar sessão</button>
+          <button type="button" onClick=${onSignOut} className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan hover:text-white"><${LogOut} size=${14} /> Encerrar sessão</button>
           <div className="flex items-center gap-2 text-xs text-slate-400"><${ShieldCheck} size=${15} className="text-cyan" /> Ambiente protegido</div>
         </div>
       </aside>`;
@@ -139,65 +175,126 @@
       </div>`;
     }
 
-    function UploadView({ api, onUploaded }) {
+    function UploadView({ api, onUploaded, onTrack }) {
       const [files, setFiles] = useState([]);
       const [channel, setChannel] = useState('whatsapp');
       const [dragging, setDragging] = useState(false);
+      const [sending, setSending] = useState(false);
       const inputRef = useRef(null);
 
       const addFiles = selected => {
-        const valid = [...selected].filter(file => ['image/jpeg', 'image/png', 'application/pdf'].includes(file.type));
-        setFiles(previous => [...previous, ...valid.map(file => ({ file, state: 'ready', message: '' }))]);
+        const incoming = [...selected].map(file => {
+          let message = '';
+          if (!ACCEPTED_TYPES.has(file.type)) message = 'Formato não aceito. Use JPEG, PNG ou PDF.';
+          else if (file.size > MAX_FILE_SIZE) message = 'Arquivo maior que 20 MB.';
+          return { id: crypto.randomUUID(), file, state: message ? 'invalid' : 'ready', message };
+        });
+        setFiles(previous => {
+          const existing = new Set(previous.map(item => `${item.file.name}:${item.file.size}:${item.file.lastModified}`));
+          return [...previous, ...incoming.filter(item => !existing.has(`${item.file.name}:${item.file.size}:${item.file.lastModified}`))];
+        });
+        if (inputRef.current) inputRef.current.value = '';
       };
 
       const uploadAll = async () => {
-        for (let index = 0; index < files.length; index++) {
-          if (files[index].state !== 'ready' && files[index].state !== 'error') continue;
-          setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'uploading', message: '' } : item));
+        const pending = files.filter(item => item.state === 'ready' || item.state === 'error');
+        if (!pending.length) return;
+        setSending(true);
+        let cursor = 0;
+        const uploadOne = async item => {
+          setFiles(current => current.map(entry => entry.id === item.id ? { ...entry, state: 'uploading', message: 'Enviando com segurança…' } : entry));
           const data = new FormData();
-          data.append('file', files[index].file);
+          data.append('file', item.file);
           data.append('source_channel', channel);
           try {
             const result = await api('/api/v1/documents', { method: 'POST', body: data });
-            setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'done', message: result.message, document: result.document, duplicate: result.duplicate } : item));
-            onUploaded();
+            setFiles(current => current.map(entry => entry.id === item.id ? { ...entry, state: result.duplicate ? 'duplicate' : 'done', message: result.duplicate ? 'Reenvio identificado; processamento existente reutilizado.' : 'Recebido e encaminhado para processamento.', document: result.document, duplicate: result.duplicate } : entry));
           } catch (error) {
-            setFiles(current => current.map((item, i) => i === index ? { ...item, state: 'error', message: error.message } : item));
+            setFiles(current => current.map(entry => entry.id === item.id ? { ...entry, state: 'error', message: error.message } : entry));
           }
-        }
+        };
+        const worker = async () => {
+          while (cursor < pending.length) {
+            const item = pending[cursor++];
+            await uploadOne(item);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, pending.length) }, worker));
+        setSending(false);
+        await onUploaded();
       };
 
-      return html`<section className="mx-auto max-w-5xl">
+      const readyCount = files.filter(item => item.state === 'ready' || item.state === 'error').length;
+      const successCount = files.filter(item => ['done', 'duplicate'].includes(item.state)).length;
+      const remove = id => setFiles(current => current.filter(item => item.id !== id));
+
+      return html`<section className="enter mx-auto max-w-5xl">
         <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-          <div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Nova entrada</p><h2 className="text-3xl font-semibold tracking-tight">Receber documentos</h2><p className="mt-2 text-sm text-muted">O conteúdo é validado, deduplicado e processado fora da requisição.</p></div>
-          <label className="text-sm font-medium text-muted">Canal de origem
-            <select value=${channel} onChange=${e => setChannel(e.target.value)} className="ml-3 rounded-lg border border-line bg-white px-3 py-2 text-ink outline-none focus:border-cyan">
+          <div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Nova entrada</p><h2 className="text-3xl font-semibold tracking-tight">Receber documentos</h2><p className="mt-2 text-sm text-muted">Envie um lote inteiro. Cada arquivo será validado, deduplicado e processado de forma independente.</p></div>
+          <label className="text-xs font-bold uppercase tracking-[.1em] text-muted">Canal de origem
+            <select value=${channel} disabled=${sending} onChange=${e => setChannel(e.target.value)} className="focus-ring ml-3 rounded-lg border border-line bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-ink outline-none disabled:opacity-50">
               <option value="whatsapp">WhatsApp</option><option value="email">E-mail</option><option value="balcao">Balcão</option><option value="internal">Sistema interno</option>
             </select>
           </label>
         </div>
 
-        <div onDragOver=${e => { e.preventDefault(); setDragging(true); }} onDragLeave=${() => setDragging(false)} onDrop=${e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} className=${`drop-grid rounded-xl border-2 border-dashed bg-white p-10 text-center transition ${dragging ? 'border-cyan bg-cyan/5' : 'border-slate-300'}`}>
-          <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-cyan/10 text-cyan-700"><${UploadCloud} size=${27} /></div>
-          <h3 className="text-lg font-semibold">Arraste JPEG, PNG ou PDF</h3>
-          <p className="mt-1 text-sm text-muted">Até 20 MB por arquivo. PDFs com no máximo 40 páginas.</p>
-          <button onClick=${() => inputRef.current?.click()} className="mt-5 rounded-lg bg-ink px-5 py-2.5 text-sm font-semibold text-white hover:bg-navy focus:outline-none focus:ring-2 focus:ring-cyan focus:ring-offset-2">Selecionar arquivos</button>
+        <div role="button" tabIndex="0" aria-label="Adicionar documentos" onKeyDown=${e => { if (['Enter', ' '].includes(e.key)) inputRef.current?.click(); }} onDragOver=${e => { e.preventDefault(); setDragging(true); }} onDragLeave=${() => setDragging(false)} onDrop=${e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} className=${`focus-ring drop-grid rounded-2xl border-2 border-dashed bg-white p-10 text-center transition ${dragging ? 'scale-[1.01] border-cyan bg-cyan/5' : 'border-slate-300 hover:border-cyan/70'}`}>
+          <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-2xl bg-cyan/10 text-cyan-700"><${UploadCloud} size=${29} /></div>
+          <h3 className="text-lg font-semibold">Arraste os documentos para cá</h3>
+          <p className="mt-1 text-sm text-muted">JPEG, PNG ou PDF · até 20 MB por arquivo · máximo de 40 páginas</p>
+          <button type="button" onClick=${e => { e.stopPropagation(); inputRef.current?.click(); }} className="focus-ring mt-5 rounded-lg bg-ink px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-navy">Escolher no computador</button>
           <input ref=${inputRef} type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange=${e => addFiles(e.target.files)} />
         </div>
 
         ${files.length ? html`<div className="mt-6 overflow-hidden rounded-xl border border-line bg-white shadow-panel">
-          <div className="flex items-center justify-between border-b border-line px-5 py-4"><h3 className="font-semibold">Lote atual <span className="ml-2 text-sm font-normal text-muted">${files.length} arquivo(s)</span></h3><button onClick=${uploadAll} disabled=${!files.some(item => item.state === 'ready' || item.state === 'error')} className="rounded-lg bg-cyan px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-40">Enviar lote</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4"><div><h3 className="font-semibold">Lote atual <span className="ml-2 text-sm font-normal text-muted">${files.length} arquivo(s)</span></h3><p className="mt-0.5 text-xs text-muted">Até 3 envios simultâneos para manter a operação fluida.</p></div><div className="flex items-center gap-2">${successCount ? html`<button type="button" onClick=${() => setFiles(current => current.filter(item => !['done', 'duplicate'].includes(item.state)))} className="focus-ring rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-slate-100">Limpar enviados</button>` : null}<button type="button" onClick=${uploadAll} disabled=${!readyCount || sending} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-cyan px-4 py-2 text-sm font-bold text-ink transition hover:bg-cyan/80 disabled:cursor-not-allowed disabled:opacity-40"><${sending ? LoaderCircle : UploadCloud} className=${sending ? 'spin' : ''} size=${16} />${sending ? 'Enviando lote…' : `Enviar ${readyCount || ''}`}</button></div></div>
           <div className="divide-y divide-line">
-            ${files.map((item, index) => html`<div key=${item.file.name + index} className="flex items-center gap-4 px-5 py-4">
-              <div className="grid h-10 w-10 place-items-center rounded-lg bg-slate-100 text-muted"><${item.file.type === 'application/pdf' ? Files : FileImage} size=${20} /></div>
-              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${item.file.name}</div><div className=${`mt-1 text-xs ${item.state === 'error' ? 'text-danger' : 'text-muted'}`}>${item.message || formatBytes(item.file.size)}</div></div>
-              ${item.state === 'ready' ? html`<button aria-label="Remover arquivo" onClick=${() => setFiles(current => current.filter((_, i) => i !== index))} className="rounded-md p-2 text-muted hover:bg-slate-100"><${X} size=${17} /></button>` : null}
+            ${files.map(item => html`<div key=${item.id} className="upload-row flex items-center gap-4 px-5 py-4">
+              <div className=${`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${['invalid', 'error'].includes(item.state) ? 'bg-red-50 text-danger' : 'bg-slate-100 text-muted'}`}>${fileIcon(item.file.type, 20)}</div>
+              <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><div className="max-w-[520px] truncate text-sm font-semibold">${item.file.name}</div>${item.state === 'duplicate' ? html`<span className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">Duplicado</span>` : null}</div><div className=${`mt-1 text-xs ${['invalid', 'error'].includes(item.state) ? 'text-danger' : 'text-muted'}`}>${item.message || `${formatBytes(item.file.size)} · ${CHANNELS[channel]}`}</div>${item.state === 'uploading' ? html`<div className="mt-2 h-1 w-full max-w-sm overflow-hidden rounded-full bg-slate-100"><div className="h-full w-2/3 rounded-full bg-cyan"></div></div>` : null}</div>
+              ${['ready', 'invalid', 'error'].includes(item.state) ? html`<button type="button" aria-label="Remover arquivo" onClick=${() => remove(item.id)} className="focus-ring rounded-md p-2 text-muted hover:bg-slate-100 hover:text-ink"><${X} size=${17} /></button>` : null}
               ${item.state === 'uploading' ? html`<${LoaderCircle} className="spin text-cyan" size=${20} />` : null}
-              ${item.state === 'done' ? html`<div className="flex items-center gap-2"><${item.duplicate ? RotateCcw : Check} className="text-emerald-600" size=${19} /><${StatusBadge} status=${item.document.status} /></div>` : null}
+              ${['done', 'duplicate'].includes(item.state) ? html`<div className="flex items-center gap-2"><${item.duplicate ? RotateCcw : Check} className="text-emerald-600" size=${19} /><${StatusBadge} status=${item.document.status} /></div>` : null}
               ${item.state === 'error' ? html`<${XCircle} className="text-danger" size=${20} />` : null}
             </div>`)}
           </div>
+          ${successCount ? html`<div className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-emerald-50/60 px-5 py-3"><div className="flex items-center gap-2 text-sm font-medium text-emerald-800"><${CheckCircle2} size=${17} />${successCount} documento(s) recebido(s) com segurança.</div><button type="button" onClick=${onTrack} className="focus-ring inline-flex items-center gap-1.5 text-sm font-bold text-cyan-800">Acompanhar processamento <${ArrowRight} size=${16} /></button></div>` : null}
         </div>` : null}
+      </section>`;
+    }
+
+    function ProcessSteps({ status }) {
+      const steps = [
+        { key: 'PENDING', label: 'Recebido' },
+        { key: 'PROCESSING', label: 'Leitura inteligente' },
+        { key: 'RESULT', label: status === 'NEEDS_REVIEW' ? 'Conferência' : status === 'FAILED' ? 'Falha' : 'Finalizado' }
+      ];
+      const level = status === 'PENDING' ? 0 : status === 'PROCESSING' ? 1 : 2;
+      return html`<div className="mt-4 grid grid-cols-3 gap-1">
+        ${steps.map((step, index) => html`<div key=${step.key} className="relative"><div className=${`h-1.5 rounded-full ${index <= level ? (status === 'FAILED' && index === 2 ? 'bg-danger' : 'bg-cyan') : 'bg-slate-200'}`}></div><div className=${`mt-2 truncate text-[10px] font-semibold uppercase tracking-[.08em] ${index <= level ? 'text-ink' : 'text-slate-400'}`}>${step.label}</div></div>`)}
+      </div>`;
+    }
+
+    function MonitorView({ documents, loading, refresh, onOpenDocument, onReview, canReview }) {
+      const active = documents.filter(doc => ['PENDING', 'PROCESSING'].includes(doc.status));
+      const attention = documents.filter(doc => ['NEEDS_REVIEW', 'FAILED'].includes(doc.status));
+      const recent = documents.filter(doc => doc.status === 'COMPLETED').slice(0, 6);
+      const cards = [...active, ...attention].slice(0, 12);
+      return html`<section className="enter">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Operação ao vivo</p><h2 className="text-3xl font-semibold tracking-tight">Acompanhar processamento</h2><p className="mt-2 text-sm text-muted">Atualização automática a cada 5 segundos. Você pode continuar trabalhando em outra tela.</p></div><button type="button" onClick=${refresh} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-semibold hover:border-cyan"><${RefreshCw} size=${16} className=${loading ? 'spin' : ''} /> Atualizar agora</button></div>
+
+        <div className="mb-7 grid gap-4 sm:grid-cols-3">
+          <div className="rounded-xl border border-line bg-white p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-muted">Aguardando</span><div className="rounded-lg bg-slate-100 p-2 text-muted"><${Clock3} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums">${documents.filter(doc => doc.status === 'PENDING').length}</div><p className="mt-1 text-xs text-muted">Na fila durável</p></div>
+          <div className="rounded-xl border border-cyan/30 bg-cyan/5 p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-cyan-800">Processando</span><div className="rounded-lg bg-cyan/15 p-2 text-cyan-800"><${Sparkles} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums text-cyan-800">${documents.filter(doc => doc.status === 'PROCESSING').length}</div><p className="mt-1 text-xs text-muted">Classificação e extração</p></div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-amber-800">Pedem atenção</span><div className="rounded-lg bg-amber-100 p-2 text-amber-800"><${AlertTriangle} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums text-amber-800">${attention.length}</div><p className="mt-1 text-xs text-muted">Conferência ou falha</p></div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
+          <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel"><div className="flex items-center justify-between border-b border-line px-5 py-4"><div><h3 className="font-semibold">Em fluxo</h3><p className="mt-0.5 text-xs text-muted">Documentos ainda não concluídos</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted">${cards.length}</span></div>
+            ${cards.length ? html`<div className="grid gap-3 p-4 md:grid-cols-2">${cards.map(doc => html`<article key=${doc.id} className="rounded-xl border border-line p-4 transition hover:border-cyan/60 hover:shadow-sm"><div className="flex items-start gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${fileIcon(doc.mime_type, 19)}</div><div className="min-w-0 flex-1"><button type="button" onClick=${() => onOpenDocument(doc)} className="focus-ring block max-w-full truncate text-left text-sm font-semibold hover:text-cyan-800">${doc.filename_original}</button><p className="mt-1 text-xs text-muted">${CHANNELS[doc.source_channel] || doc.source_channel} · ${relativeTime(doc.created_at)}</p></div><${StatusBadge} status=${doc.status} /></div><${ProcessSteps} status=${doc.status} />${doc.status === 'NEEDS_REVIEW' && canReview ? html`<button type="button" onClick=${onReview} className="focus-ring mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"><${ClipboardCheck} size=${15} /> Abrir conferência</button>` : null}${doc.status === 'FAILED' ? html`<p className="mt-3 line-clamp-2 text-xs text-danger">${doc.error_message || 'O processamento não pôde ser concluído.'}</p>` : null}</article>`)}</div>` : html`<div className="grid min-h-[290px] place-items-center p-8 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-50 text-emerald-600"><${CheckCircle2} size=${26} /></div><h4 className="mt-4 font-semibold">Tudo processado</h4><p className="mt-1 text-sm text-muted">Não há documentos aguardando neste momento.</p></div></div>`}
+          </div>
+          <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel"><div className="border-b border-line px-5 py-4"><h3 className="font-semibold">Concluídos recentemente</h3><p className="mt-0.5 text-xs text-muted">Últimos resultados prontos</p></div>${recent.length ? html`<div className="divide-y divide-line">${recent.map(doc => html`<button type="button" key=${doc.id} onClick=${() => onOpenDocument(doc)} className="focus-ring flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-slate-50"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><${FileCheck2} size=${17} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 text-xs text-muted">${doc.document_type || 'Documento'} · ${Math.round(doc.confidence_score * 100)}%</div></div><${ChevronRight} size=${16} className="text-slate-300" /></button>`)}</div>` : html`<div className="p-8 text-center text-sm text-muted">Nenhum resultado concluído ainda.</div>`}</div>
+        </div>
       </section>`;
     }
 
@@ -205,7 +302,8 @@
       const [url, setUrl] = useState(null);
       const [error, setError] = useState(null);
       useEffect(() => {
-        if (!document) return;
+        setUrl(null); setError(null);
+        if (!document || document.status === 'PURGED') return;
         let active = true;
         let objectUrl;
         fetch(`/api/v1/documents/${document.id}/content`, { headers: authHeaders })
@@ -258,13 +356,14 @@
 
       if (!document) return html`<section className="grid min-h-[65vh] place-items-center"><div className="max-w-md text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white text-cyan shadow-panel"><${Inbox} size=${30} /></div><h2 className="text-2xl font-semibold">Fila de conferência</h2><p className="mt-2 text-sm text-muted">${message || 'Buscando o próximo item disponível…'}</p><button onClick=${claim} disabled=${busy} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-ink px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><${busy ? LoaderCircle : RefreshCw} className=${busy ? 'spin' : ''} size=${17} /> Buscar próximo</button></div></section>`;
 
-      return html`<section>
+      const changedCount = document ? Object.entries(fields).filter(([key, value]) => (document.extracted_data || {})[key] !== value).length : 0;
+      return html`<section className="enter">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-amber-700">Conferência humana</p><h2 className="mt-1 text-2xl font-semibold">Validar extração</h2></div><div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"><${LockKeyhole} size=${15} /> Reservado para ${principal.name || principal.email || principal.subject}</div></div>
         ${message ? html`<div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">${message}</div>` : null}
         <div className="review-grid grid min-h-[650px] grid-cols-[1.15fr_.85fr] overflow-hidden rounded-xl border border-line bg-white shadow-panel">
-          <div className="flex min-h-[580px] flex-col border-r border-line bg-slate-200">
-            <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3"><div className="flex min-w-0 items-center gap-2"><${FileImage} size=${17} className="text-muted" /><span className="truncate text-sm font-semibold">${document.filename_original}</span></div><span className="text-xs text-muted">${formatBytes(document.size_bytes)}</span></div>
-            <div className="grid flex-1 place-items-center overflow-hidden p-5">
+          <div className="review-preview flex min-h-[580px] flex-col border-r border-line bg-slate-200">
+            <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3"><div className="flex min-w-0 items-center gap-2">${fileIcon(document.mime_type, 17)}<span className="truncate text-sm font-semibold">${document.filename_original}</span></div><div className="flex items-center gap-3"><span className="text-xs text-muted">${formatBytes(document.size_bytes)}</span>${url ? html`<a href=${url} target="_blank" rel="noreferrer" aria-label="Abrir documento em nova aba" className="focus-ring rounded-md p-1.5 text-muted hover:bg-slate-100 hover:text-ink"><${ExternalLink} size=${15} /></a>` : null}</div></div>
+            <div className="document-canvas grid flex-1 place-items-center overflow-hidden p-5">
               ${previewError ? html`<div className="text-sm text-danger">${previewError}</div>` : !url ? html`<${LoaderCircle} className="spin text-cyan" size=${28} />` : document.mime_type === 'application/pdf' ? html`<iframe title="Documento PDF" src=${url} className="h-full min-h-[560px] w-full rounded-md bg-white"></iframe>` : html`<img src=${url} alt="Documento em conferência" className="max-h-[600px] max-w-full rounded-md bg-white object-contain shadow-panel" />`}
             </div>
           </div>
@@ -272,27 +371,64 @@
             <div className="mb-6 flex items-center justify-between border-b border-line pb-5"><div><div className="text-xs font-semibold uppercase tracking-[.14em] text-muted">Confiança do modelo</div><div className="mt-1 text-3xl font-semibold text-amber-700">${Math.round(document.confidence_score * 100)}%</div></div><${StatusBadge} status=${document.status} /></div>
             <label className="mb-4 block text-sm font-semibold">Tipo do documento<input value=${docType} onInput=${e => setDocType(e.target.value)} className="mt-1.5 w-full rounded-lg border border-line px-3 py-2.5 font-normal outline-none focus:border-cyan focus:ring-2 focus:ring-cyan/15" /></label>
             <label className="mb-5 block text-sm font-semibold">Nome padronizado<input value=${suggested} onInput=${e => setSuggested(e.target.value)} className="mt-1.5 w-full rounded-lg border border-line px-3 py-2.5 font-normal outline-none focus:border-cyan focus:ring-2 focus:ring-cyan/15" /></label>
-            <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Campos extraídos</h3><button onClick=${() => setFields(current => ({ ...current, [`campo_${Object.keys(current).length + 1}`]: '' }))} className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-700"><${Plus} size=${14} /> Campo</button></div>
+            <div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2"><h3 className="text-sm font-semibold">Campos extraídos</h3>${changedCount ? html`<span className="rounded-full bg-cyan/10 px-2 py-0.5 text-[10px] font-bold text-cyan-800">${changedCount} alterado(s)</span>` : null}</div><button type="button" onClick=${() => setFields(current => ({ ...current, [`campo_${Object.keys(current).length + 1}`]: '' }))} className="focus-ring inline-flex items-center gap-1 text-xs font-semibold text-cyan-700"><${Plus} size=${14} /> Campo</button></div>
             <div className="space-y-3">
-              ${Object.entries(fields).map(([key, value]) => html`<div key=${key} className="grid grid-cols-[120px_1fr_32px] items-center gap-2"><label className="truncate text-xs font-medium text-muted" title=${key}>${key.replaceAll('_', ' ')}</label><input value=${value ?? ''} onInput=${e => setFields(current => ({ ...current, [key]: e.target.value || null }))} className="w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-cyan" /><button aria-label=${`Remover ${key}`} onClick=${() => setFields(current => Object.fromEntries(Object.entries(current).filter(([name]) => name !== key)))} className="rounded-md p-1.5 text-muted hover:bg-red-50 hover:text-danger"><${X} size=${15} /></button></div>`)}
+              ${Object.entries(fields).map(([key, value]) => html`<div key=${key} className="grid grid-cols-[120px_1fr_32px] items-center gap-2"><label className="truncate text-xs font-medium capitalize text-muted" title=${key}>${key.replaceAll('_', ' ')}</label><input value=${value ?? ''} onInput=${e => setFields(current => ({ ...current, [key]: e.target.value || null }))} className=${`focus-ring w-full rounded-lg border px-3 py-2 text-sm outline-none ${(document.extracted_data || {})[key] !== value ? 'border-cyan bg-cyan/5' : 'border-line'}`} /><button type="button" aria-label=${`Remover ${key}`} onClick=${() => setFields(current => Object.fromEntries(Object.entries(current).filter(([name]) => name !== key)))} className="focus-ring rounded-md p-1.5 text-muted hover:bg-red-50 hover:text-danger"><${X} size=${15} /></button></div>`)}
             </div>
             <label className="mt-5 block text-sm font-semibold">Observação<textarea value=${notes} onInput=${e => setNotes(e.target.value)} rows="3" placeholder="Opcional" className="mt-1.5 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm font-normal outline-none focus:border-cyan"></textarea></label>
-            <div className="mt-6 grid grid-cols-[.65fr_1.35fr] gap-3"><button onClick=${() => submit('REJECT')} disabled=${busy} className="rounded-lg border border-red-200 px-4 py-2.5 text-sm font-semibold text-danger hover:bg-red-50 disabled:opacity-40">Rejeitar</button><button onClick=${() => submit('APPROVE')} disabled=${busy || !docType || !suggested} className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan px-4 py-2.5 text-sm font-bold text-ink hover:bg-cyan/80 disabled:opacity-40"><${FileCheck2} size=${17} /> Aprovar e próximo</button></div>
+            <div className="mt-6 grid grid-cols-[.65fr_1.35fr] gap-3"><button type="button" onClick=${() => submit('REJECT')} disabled=${busy} className="focus-ring rounded-lg border border-red-200 px-4 py-2.5 text-sm font-semibold text-danger hover:bg-red-50 disabled:opacity-40">Rejeitar</button><button type="button" onClick=${() => submit('APPROVE')} disabled=${busy || !docType || !suggested} className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-cyan px-4 py-2.5 text-sm font-bold text-ink hover:bg-cyan/80 disabled:opacity-40"><${busy ? LoaderCircle : FileCheck2} className=${busy ? 'spin' : ''} size=${17} /> Aprovar e próximo</button></div>
           </div>
         </div>
       </section>`;
     }
 
-    function DocumentsView({ documents, loading, api, refresh }) {
+    function DocumentDrawer({ document, authHeaders, onClose }) {
+      const { url, error } = useDocumentBlob(authHeaders, document);
+      useEffect(() => {
+        if (!document) return;
+        const close = event => { if (event.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', close);
+        return () => window.removeEventListener('keydown', close);
+      }, [document?.id]);
+      if (!document) return null;
+      const fields = Object.entries(document.extracted_data || {});
+      return html`<div className="fixed inset-0 z-50 flex justify-end bg-ink/45 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Detalhes do documento" onMouseDown=${event => { if (event.target === event.currentTarget) onClose(); }}>
+        <aside className="drawer-panel drawer-enter scrollbar-thin h-full w-[min(680px,94vw)] overflow-y-auto bg-paper shadow-float">
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-white/95 px-6 py-4 backdrop-blur"><div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-cyan-800">Detalhes do documento</p><h2 className="mt-1 max-w-[500px] truncate text-lg font-semibold">${document.filename_suggested || document.filename_original}</h2></div><button type="button" onClick=${onClose} aria-label="Fechar detalhes" className="focus-ring rounded-lg p-2 text-muted hover:bg-slate-100 hover:text-ink"><${X} size=${20} /></button></div>
+          <div className="p-6">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><${StatusBadge} status=${document.status} /><div className="flex items-center gap-2">${url ? html`<a href=${url} target="_blank" rel="noreferrer" className="focus-ring inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold hover:border-cyan"><${ExternalLink} size=${15} /> Abrir original</a><a href=${url} download=${document.filename_suggested || document.filename_original} className="focus-ring rounded-lg border border-line bg-white p-2 text-muted hover:border-cyan hover:text-ink" aria-label="Baixar original"><${Download} size=${15} /></a>` : null}</div></div>
+
+            ${document.status !== 'PURGED' ? html`<div className="document-canvas mb-6 grid min-h-[300px] place-items-center overflow-hidden rounded-xl border border-line p-4">${error ? html`<div className="flex items-center gap-2 text-sm text-danger"><${AlertCircle} size=${17} />${error}</div>` : !url ? html`<${LoaderCircle} className="spin text-cyan" size=${26} />` : document.mime_type === 'application/pdf' ? html`<iframe title="Visualização do documento" src=${url} className="h-[430px] w-full rounded-lg bg-white"></iframe>` : html`<img src=${url} alt="Documento original" className="max-h-[430px] max-w-full rounded-lg bg-white object-contain shadow-panel" />`}</div>` : html`<div className="mb-6 rounded-xl border border-line bg-white p-8 text-center text-sm text-muted"><${ShieldCheck} className="mx-auto mb-3" size=${24} />O conteúdo foi descartado conforme a política de retenção.</div>`}
+
+            <div className="grid gap-4 sm:grid-cols-3"><div className="rounded-xl border border-line bg-white p-4"><div className="text-[10px] font-bold uppercase tracking-[.1em] text-muted">Tipo</div><div className="mt-1.5 text-sm font-semibold">${document.document_type || 'Não classificado'}</div></div><div className="rounded-xl border border-line bg-white p-4"><div className="text-[10px] font-bold uppercase tracking-[.1em] text-muted">Confiança</div><div className="mt-1.5 text-sm font-semibold">${document.confidence_score ? `${Math.round(document.confidence_score * 100)}%` : '—'}</div></div><div className="rounded-xl border border-line bg-white p-4"><div className="text-[10px] font-bold uppercase tracking-[.1em] text-muted">Origem</div><div className="mt-1.5 text-sm font-semibold">${CHANNELS[document.source_channel] || document.source_channel}</div></div></div>
+
+            <section className="mt-6 overflow-hidden rounded-xl border border-line bg-white"><div className="flex items-center justify-between border-b border-line px-5 py-4"><h3 className="font-semibold">Campos extraídos</h3><span className="text-xs text-muted">${fields.length} campo(s)</span></div>${fields.length ? html`<dl className="divide-y divide-line">${fields.map(([key, value]) => html`<div key=${key} className="grid grid-cols-[minmax(120px,.65fr)_1.35fr] gap-4 px-5 py-3.5"><dt className="text-xs font-semibold capitalize text-muted">${key.replaceAll('_', ' ')}</dt><dd className="break-words text-sm font-medium">${value ?? '—'}</dd></div>`)}</dl>` : html`<div className="px-5 py-8 text-center text-sm text-muted">Ainda não há campos disponíveis.</div>`}</section>
+
+            <section className="mt-6 rounded-xl border border-line bg-white p-5"><h3 className="mb-4 font-semibold">Rastreabilidade</h3><dl className="grid gap-x-5 gap-y-4 text-sm sm:grid-cols-2"><div><dt className="text-xs text-muted">Recebido em</dt><dd className="mt-1 font-medium">${formatDate(document.created_at)}</dd></div><div><dt className="text-xs text-muted">Processado em</dt><dd className="mt-1 font-medium">${formatDate(document.processed_at)}</dd></div><div><dt className="text-xs text-muted">Modelo</dt><dd className="mt-1 font-medium">${document.model_version || '—'}</dd></div><div><dt className="text-xs text-muted">Prompt</dt><dd className="mt-1 font-medium">${document.prompt_version || '—'}</dd></div><div className="sm:col-span-2"><dt className="text-xs text-muted">ID</dt><dd className="mt-1 break-all font-mono text-xs">${document.id}</dd></div></dl></section>
+          </div>
+        </aside>
+      </div>`;
+    }
+
+    function DocumentsView({ documents, loading, api, refresh, onOpen, canAdmin }) {
       const [query, setQuery] = useState('');
       const [status, setStatus] = useState('ALL');
-      const filtered = useMemo(() => documents.filter(doc => (status === 'ALL' || doc.status === status) && `${doc.filename_original} ${doc.document_type || ''}`.toLowerCase().includes(query.toLowerCase())), [documents, query, status]);
-      const retry = async id => { try { await api(`/api/v1/documents/${id}/retry`, { method: 'POST' }); refresh(); } catch (error) { alert(error.message); } };
-      return html`<section>
-        <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Acervo operacional</p><h2 className="text-3xl font-semibold tracking-tight">Documentos processados</h2></div><button onClick=${refresh} className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold hover:border-cyan"><${RefreshCw} size=${16} className=${loading ? 'spin' : ''} /> Atualizar</button></div>
-        <div className="mb-4 flex flex-wrap gap-3"><label className="relative min-w-[280px] flex-1"><${Search} size=${17} className="absolute left-3 top-2.5 text-muted" /><input value=${query} onInput=${e => setQuery(e.target.value)} placeholder="Buscar por nome ou tipo" className="w-full rounded-lg border border-line bg-white py-2 pl-10 pr-3 text-sm outline-none focus:border-cyan" /></label><select value=${status} onChange=${e => setStatus(e.target.value)} className="rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-cyan"><option value="ALL">Todos os status</option>${Object.entries(STATUS).map(([value, item]) => html`<option value=${value}>${item.label}</option>`)}</select></div>
-        <div className="overflow-x-auto rounded-xl border border-line bg-white shadow-panel"><table className="w-full min-w-[820px] border-collapse text-left"><thead><tr className="border-b border-line bg-slate-50 text-xs font-bold uppercase tracking-[.1em] text-muted"><th className="px-5 py-3.5">Documento</th><th className="px-4 py-3.5">Origem</th><th className="px-4 py-3.5">Tipo</th><th className="px-4 py-3.5">Confiança</th><th className="px-4 py-3.5">Status</th><th className="px-4 py-3.5">Recebido</th><th className="w-12"></th></tr></thead><tbody className="divide-y divide-line">
-          ${filtered.length ? filtered.map(doc => html`<tr key=${doc.id} className="hover:bg-slate-50"><td className="px-5 py-4"><div className="max-w-[260px] truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 max-w-[260px] truncate text-xs text-muted">${doc.filename_original} · ${formatBytes(doc.size_bytes)}</div></td><td className="px-4 py-4 text-sm capitalize text-muted">${doc.source_channel}</td><td className="px-4 py-4 text-sm">${doc.document_type || '—'}</td><td className="px-4 py-4 text-sm font-semibold tabular-nums">${doc.confidence_score ? `${Math.round(doc.confidence_score * 100)}%` : '—'}</td><td className="px-4 py-4"><${StatusBadge} status=${doc.status} /></td><td className="px-4 py-4 text-xs text-muted">${formatDate(doc.created_at)}</td><td className="px-4 py-4">${doc.status === 'FAILED' ? html`<button title="Tentar novamente" onClick=${() => retry(doc.id)} className="rounded-md p-2 text-muted hover:bg-cyan/10 hover:text-cyan-700"><${RotateCcw} size=${16} /></button>` : html`<${ChevronRight} size=${16} className="text-slate-300" />`}</td></tr>`) : html`<tr><td colSpan="7" className="px-5 py-14 text-center text-sm text-muted">Nenhum documento corresponde aos filtros.</td></tr>`}
+      const [channel, setChannel] = useState('ALL');
+      const [error, setError] = useState('');
+      const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
+      const filtered = useMemo(() => documents.filter(doc => {
+        const haystack = `${doc.filename_original} ${doc.filename_suggested || ''} ${doc.document_type || ''} ${Object.values(doc.extracted_data || {}).join(' ')}`.toLocaleLowerCase('pt-BR');
+        return (status === 'ALL' || doc.status === status) && (channel === 'ALL' || doc.source_channel === channel) && (!normalizedQuery || haystack.includes(normalizedQuery));
+      }), [documents, query, status, channel]);
+      const retry = async (event, id) => { event.stopPropagation(); setError(''); try { await api(`/api/v1/documents/${id}/retry`, { method: 'POST' }); await refresh(); } catch (err) { setError(err.message); } };
+      const clearFilters = () => { setQuery(''); setStatus('ALL'); setChannel('ALL'); };
+      return html`<section className="enter">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-bold uppercase tracking-[.18em] text-cyan-700">Acervo operacional</p><h2 className="text-3xl font-semibold tracking-tight">Documentos processados</h2><p className="mt-2 text-sm text-muted">Localize por nome, tipo ou qualquer valor extraído.</p></div><button type="button" onClick=${refresh} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-semibold hover:border-cyan"><${RefreshCw} size=${16} className=${loading ? 'spin' : ''} /> Atualizar</button></div>
+        ${error ? html`<div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-danger"><${AlertCircle} size=${17} />${error}</div>` : null}
+        <div className="mb-4 rounded-xl border border-line bg-white p-3 shadow-panel"><div className="flex flex-wrap gap-3"><label className="relative min-w-[260px] flex-1"><span className="sr-only">Buscar documentos</span><${Search} size=${17} className="absolute left-3 top-2.5 text-muted" /><input value=${query} onInput=${e => setQuery(e.target.value)} placeholder="Buscar nome, CPF, RG, tipo…" className="focus-ring w-full rounded-lg border border-line bg-white py-2 pl-10 pr-3 text-sm outline-none" /></label><label className="relative"><span className="sr-only">Filtrar por status</span><select value=${status} onChange=${e => setStatus(e.target.value)} className="focus-ring rounded-lg border border-line bg-white px-3 py-2 pr-9 text-sm outline-none"><option value="ALL">Todos os status</option>${Object.entries(STATUS).map(([value, item]) => html`<option key=${value} value=${value}>${item.label}</option>`)}</select></label><label><span className="sr-only">Filtrar por canal</span><select value=${channel} onChange=${e => setChannel(e.target.value)} className="focus-ring rounded-lg border border-line bg-white px-3 py-2 pr-9 text-sm outline-none"><option value="ALL">Todos os canais</option>${Object.entries(CHANNELS).map(([value, label]) => html`<option key=${value} value=${value}>${label}</option>`)}</select></label></div></div>
+        <div className="mb-3 flex items-center justify-between px-1 text-xs text-muted"><span><strong className="text-ink">${filtered.length}</strong> de ${documents.length} documento(s)</span>${(query || status !== 'ALL' || channel !== 'ALL') ? html`<button type="button" onClick=${clearFilters} className="focus-ring font-semibold text-cyan-800">Limpar filtros</button>` : null}</div>
+        <div className="overflow-x-auto rounded-xl border border-line bg-white shadow-panel"><table className="w-full min-w-[900px] border-collapse text-left"><thead><tr className="border-b border-line bg-slate-50 text-xs font-bold uppercase tracking-[.1em] text-muted"><th className="px-5 py-3.5">Documento</th><th className="px-4 py-3.5">Origem</th><th className="px-4 py-3.5">Tipo</th><th className="px-4 py-3.5">Confiança</th><th className="px-4 py-3.5">Status</th><th className="px-4 py-3.5">Recebido</th><th className="w-12"><span className="sr-only">Ações</span></th></tr></thead><tbody className="divide-y divide-line">
+          ${filtered.length ? filtered.map(doc => html`<tr key=${doc.id} onClick=${() => onOpen(doc)} tabIndex="0" onKeyDown=${event => { if (event.key === 'Enter') onOpen(doc); }} className="cursor-pointer outline-none transition hover:bg-slate-50 focus:bg-cyan/5"><td className="px-5 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${fileIcon(doc.mime_type, 18)}</div><div className="min-w-0"><div className="max-w-[280px] truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 max-w-[280px] truncate text-xs text-muted">${doc.filename_original} · ${formatBytes(doc.size_bytes)}</div></div></div></td><td className="px-4 py-4 text-sm text-muted">${CHANNELS[doc.source_channel] || doc.source_channel}</td><td className="px-4 py-4 text-sm">${doc.document_type || '—'}</td><td className="px-4 py-4"><div className="flex items-center gap-2"><div className="h-1.5 w-14 overflow-hidden rounded-full bg-slate-100"><div className=${`h-full rounded-full ${doc.confidence_score >= .85 ? 'bg-emerald-500' : 'bg-amber'}`} style=${{ width: `${Math.round(doc.confidence_score * 100)}%` }}></div></div><span className="text-xs font-semibold tabular-nums">${doc.confidence_score ? `${Math.round(doc.confidence_score * 100)}%` : '—'}</span></div></td><td className="px-4 py-4"><${StatusBadge} status=${doc.status} /></td><td className="px-4 py-4 text-xs text-muted">${formatDate(doc.created_at)}</td><td className="px-4 py-4">${doc.status === 'FAILED' && canAdmin ? html`<button type="button" title="Tentar novamente" aria-label="Tentar processar novamente" onClick=${event => retry(event, doc.id)} className="focus-ring rounded-md p-2 text-muted hover:bg-cyan/10 hover:text-cyan-700"><${RotateCcw} size=${16} /></button>` : html`<${ChevronRight} size=${16} className="text-slate-300" />`}</td></tr>`) : html`<tr><td colSpan="7" className="px-5 py-16 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-muted"><${Search} size=${22} /></div><h3 className="mt-3 text-sm font-semibold">Nenhum documento encontrado</h3><p className="mt-1 text-xs text-muted">Ajuste os termos ou remova os filtros.</p></td></tr>`}
         </tbody></table></div>
       </section>`;
     }
@@ -313,10 +449,12 @@
       const [summary, setSummary] = useState({ waiting: 0, claimed: 0 });
       const [loading, setLoading] = useState(false);
       const [serviceError, setServiceError] = useState('');
+      const [selectedDocument, setSelectedDocument] = useState(null);
       const developmentAuth = Boolean(authConfig?.auth_disabled);
       const api = useMemo(() => apiClient(accessToken, developmentAuth), [accessToken, developmentAuth]);
       const authHeaders = useMemo(() => accessToken ? { Authorization: `Bearer ${accessToken}` } : developmentAuth ? { 'X-Dev-User': 'dev.operator', 'X-Dev-Roles': 'document.submit,document.read,document.review,document.admin' } : {}, [accessToken, developmentAuth]);
       const canReview = principal?.roles?.some(role => ['document.review', 'document.admin'].includes(role));
+      const canAdmin = principal?.roles?.includes('document.admin');
 
       useEffect(() => {
         let active = true;
@@ -375,6 +513,11 @@
       }, [api, principal?.subject, canReview]);
 
       useEffect(() => { if (!principal) return; refresh(); const timer = setInterval(refresh, 5000); return () => clearInterval(timer); }, [refresh, principal?.subject]);
+      useEffect(() => {
+        if (!selectedDocument) return;
+        const updated = documents.find(item => item.id === selectedDocument.id);
+        if (updated && updated.updated_at !== selectedDocument.updated_at) setSelectedDocument(updated);
+      }, [documents, selectedDocument?.id]);
       if (!principal) return html`<${SignInGate} loading=${authLoading} error=${authError} onSignIn=${signIn} />`;
 
       const metrics = {
@@ -384,15 +527,18 @@
       };
 
       return html`<div className="app-shell grid min-h-screen grid-cols-[260px_1fr]">
-        <${Sidebar} view=${view} setView=${setView} principal=${principal} onSignOut=${signOut} reviewCount=${summary.waiting} />
+        <${Sidebar} view=${view} setView=${setView} principal=${principal} onSignOut=${signOut} reviewCount=${summary.waiting} activeCount=${metrics.processing} />
         <main className="min-w-0">
-          <header className="border-b border-line bg-white px-7 py-4"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-2 text-sm font-medium text-muted"><span className=${`h-2 w-2 rounded-full ${serviceError ? 'bg-danger' : 'bg-emerald-500'}`}></span>${serviceError ? serviceError : 'Serviço operacional'}</div><div className="grid grid-cols-3"><${Metric} label="Hoje" value=${metrics.today} icon=${Activity} /><${Metric} label="Em fluxo" value=${metrics.processing} icon=${Clock3} accent="text-cyan-700" /><${Metric} label="Concluídos" value=${metrics.completed} icon=${CheckCircle2} accent="text-emerald-700" /></div></div></header>
-          <div className="mx-auto max-w-7xl p-7 lg:p-9">
-            ${view === 'upload' ? html`<${UploadView} api=${api} onUploaded=${refresh} />` : null}
+          <header className="border-b border-line bg-white px-7 py-3"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4"><div className=${`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${serviceError ? 'bg-red-50 text-danger' : 'bg-emerald-50 text-emerald-700'}`}><span className=${`h-2 w-2 rounded-full ${serviceError ? 'bg-danger' : 'bg-emerald-500'}`}></span>${serviceError ? 'Serviço indisponível' : 'Serviço operacional'}</div><div className="desk-metrics grid grid-cols-3"><${Metric} label="Hoje" value=${metrics.today} icon=${Activity} /><${Metric} label="Em fluxo" value=${metrics.processing} icon=${Clock3} accent="text-cyan-700" /><${Metric} label="Concluídos" value=${metrics.completed} icon=${CheckCircle2} accent="text-emerald-700" /></div></div></header>
+          ${serviceError ? html`<div className="border-b border-red-200 bg-red-50 px-7 py-2 text-center text-xs font-medium text-danger">${serviceError}. Tentaremos reconectar automaticamente.</div>` : null}
+          <div className="page-pad mx-auto max-w-7xl p-7 lg:p-9">
+            ${view === 'upload' ? html`<${UploadView} api=${api} onUploaded=${refresh} onTrack=${() => setView('monitor')} />` : null}
+            ${view === 'monitor' ? html`<${MonitorView} documents=${documents} loading=${loading} refresh=${refresh} onOpenDocument=${setSelectedDocument} onReview=${() => setView('review')} canReview=${canReview} />` : null}
             ${view === 'review' && canReview ? html`<${ReviewView} api=${api} authHeaders=${authHeaders} principal=${principal} onChanged=${refresh} />` : null}
-            ${view === 'documents' ? html`<${DocumentsView} documents=${documents} loading=${loading} api=${api} refresh=${refresh} />` : null}
+            ${view === 'documents' ? html`<${DocumentsView} documents=${documents} loading=${loading} api=${api} refresh=${refresh} onOpen=${setSelectedDocument} canAdmin=${canAdmin} />` : null}
           </div>
         </main>
+        <${DocumentDrawer} document=${selectedDocument} authHeaders=${authHeaders} onClose=${() => setSelectedDocument(null)} />
       </div>`;
     }
 

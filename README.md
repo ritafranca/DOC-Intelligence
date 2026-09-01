@@ -44,6 +44,15 @@ Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC
 
 Abra [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
+## Interface de atendimento
+
+A SPA é servida pela própria API e oferece quatro áreas conforme o RBAC do usuário:
+
+- **Receber:** upload em lote por arrastar e soltar, validação local, até três envios simultâneos e indicação de duplicidade.
+- **Acompanhar:** visão operacional atualizada automaticamente com fila, processamento, falhas e itens aguardando conferência.
+- **Conferir:** documento original e campos extraídos lado a lado, reserva exclusiva do item, correção, aprovação ou rejeição.
+- **Acervo:** busca por nome, tipo e valores extraídos, filtros por canal/status e painel com original, resultado e rastreabilidade.
+
 Usuários demonstrativos do Keycloak:
 
 | Usuário | Senha | Permissões |
