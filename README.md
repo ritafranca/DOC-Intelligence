@@ -1,6 +1,6 @@
 # DOC Intelligence
 
-## A ideia nasceu de um problema bem pouco glamouroso
+## A ideia nasceu de um problema real do escritório: 
 
 O DOC Intelligence existe para poupar o pessoal do atendimento jurídico de passar o dia digitando, na mão, dados de RGs, CNHs, certidões e outros documentos que chegam por WhatsApp, e-mail ou balcão.
 
@@ -10,7 +10,7 @@ Quando a confiança da extração fica abaixo de 85%, o documento não é tratad
 
 O objetivo não é tirar a decisão das mãos de quem trabalha com o processo. É eliminar a digitação repetitiva e deixar a pessoa cuidar das exceções que realmente precisam de atenção.
 
-## A fatia vertical: o que realmente entregamos
+## A entrega: 
 
 Esta entrega cobre o caminho completo de um documento, sem fingir que já resolve todos os casos do mundo:
 
@@ -24,7 +24,7 @@ Esta entrega cobre o caminho completo de um documento, sem fingir que já resolv
 
 A gente focou no caminho feliz, mas tratou os problemas que aparecem na vida real. Uma chamada multimodal pode levar de 5 a 40 segundos, falhar ou simplesmente não responder. Por isso, a extração não acontece dentro da requisição de upload. Reenvios são deduplicados pelo conteúdo, não pelo nome do arquivo. A fila de conferência usa uma reserva temporária para dois atendentes não corrigirem o mesmo documento ao mesmo tempo.
 
-### As peças que usamos
+### O que foi utilizado: 
 
 - **FastAPI, Pydantic e SQLAlchemy assíncrono:** API, validação e persistência.
 - **React, Tailwind CSS e Framer Motion:** interface de upload, acompanhamento, conferência, acervo e administração de usuários.
@@ -34,10 +34,7 @@ A gente focou no caminho feliz, mas tratou os problemas que aparecem na vida rea
 - **SQLite e worker embutido:** usados somente no modo de demonstração e nos testes, para facilitar a avaliação local.
 - **JWT local e RBAC:** login individual no ambiente de demonstração. Em produção, o projeto continua preparado para OIDC.
 
-Não existe promessa mágica aqui: OCR erra, foto ruim continua sendo foto ruim e documento jurídico merece conferência quando houver dúvida. A fila humana faz parte da solução, não é um remendo.
-
-## Rodando na sua máquina sem brigar com o PowerShell
-
+## Rodando na sua máquina: 
 O caminho abaixo é o mais simples para testar. Ele usa SQLite, armazenamento local e um consumidor embutido. Você não precisa subir PostgreSQL, Redis ou Docker para essa demonstração.
 
 ### 1. Confira a versão do Python
@@ -132,11 +129,10 @@ Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC
 & ".\.venv311\Scripts\python.exe" -m arq app.worker.WorkerSettings
 ```
 
-Produção é outra conversa: ali o projeto exige PostgreSQL com TLS, Redis com TLS, arquivos protegidos por KMS e autenticação OIDC. SQLite e o usuário `admin` padrão não devem sair do ambiente de teste.
 
-## Como testar sem usar o RG de ninguém
+## Como testar sem usar o RG de ninguém: 
 
-O que escolhemos testar e por quê: cobrimos o fluxo que mais pode causar problema operacional — upload, validação, deduplicação, autenticação, permissões, reserva concorrente da conferência, correção humana e descarte. Também validamos o contrato dos extratores e as métricas por campo. Esses testes dão segurança para mudar OCR, prompt ou modelo sem descobrir a regressão só depois que um atendente abrir um documento real.
+O que escolhi testar e por quê: cobrimos o fluxo que mais pode causar problema operacional (upload, validação, deduplicação, autenticação, permissões, reserva concorrente da conferência, correção humana e descarte). Também validamos o contrato dos extratores e as métricas por campo. Esses testes dão segurança para mudar OCR, prompt ou modelo sem descobrir a regressão só depois que um atendente abrir um documento real.
 
 Rode a suíte automatizada com:
 
