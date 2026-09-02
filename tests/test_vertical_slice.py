@@ -188,7 +188,7 @@ def test_production_foundation_vertical_slice() -> None:
         spa = client.get("/")
         assert spa.status_code == 200
         assert "DOC Intelligence" in spa.text
-        assert "Acompanhar processamento" in spa.text
+        assert "Triagem ativa" in spa.text
         assert "Detalhes do documento" in spa.text
         assert 'type="file" multiple' in spa.text
 
