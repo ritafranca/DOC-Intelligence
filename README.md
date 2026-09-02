@@ -1,50 +1,76 @@
 # DOC Intelligence
 
-Serviço interno de inteligência documental com PostgreSQL, object storage criptografado, fila durável, workers independentes, OIDC/RBAC, Alembic, governança LGPD e avaliações versionadas.
+## A ideia nasceu de um problema bem pouco glamouroso
 
-## Arquitetura de execução
+O DOC Intelligence existe para poupar o pessoal do atendimento jurídico de passar o dia digitando, na mão, dados de RGs, CNHs, certidões e outros documentos que chegam por WhatsApp, e-mail ou balcão.
 
-- **API:** FastAPI; valida e persiste o upload, grava o outbox e responde sem esperar o LLM.
-- **Banco:** PostgreSQL gerenciado via SQLAlchemy Async/asyncpg.
-- **Arquivos:** S3 compatível, sempre com SSE; produção exige KMS.
-- **Fila:** Redis persistente + ARQ. API e workers são processos separados.
-- **Identidade:** JWT local com usuários persistidos no desenvolvimento; OIDC Authorization Code + PKCE em produção.
-- **Schema:** somente Alembic altera o banco do runtime.
-- **Governança:** retenção, legal hold, descarte e auditoria append-only.
-- **Qualidade:** datasets golden com métricas por campo/modelo/prompt.
+Na prática, esses arquivos quase nunca chegam bonitos. A foto está torta, o CPF ficou meio borrado, o nome do arquivo é `WhatsApp Image 2026...jpeg` e, por garantia, a mesma pessoa mandou o documento cinco vezes. O sistema recebe esse material, identifica duplicidades, tenta descobrir o tipo do documento, extrai os campos úteis e propõe um nome de arquivo que faça sentido.
 
-## Ambiente local equivalente
+Quando a confiança da extração fica abaixo de 85%, o documento não é tratado como pronto. Ele vai para uma fila de conferência humana, onde um operador vê o original ao lado dos campos extraídos, corrige o que for necessário e aprova o resultado.
 
-Requisitos: Python 3.11+, Docker Desktop e portas 5432, 6379, 8080, 9000 e 9001 livres.
+O objetivo não é tirar a decisão das mãos de quem trabalha com o processo. É eliminar a digitação repetitiva e deixar a pessoa cuidar das exceções que realmente precisam de atenção.
 
-> O arquivo `.env` antigo usava SQLite. Faça uma cópia dele se necessário e gere um novo a partir do exemplo.
+## A fatia vertical: o que realmente entregamos
+
+Esta entrega cobre o caminho completo de um documento, sem fingir que já resolve todos os casos do mundo:
+
+1. uma aplicação interna envia uma imagem ou PDF;
+2. a API valida o arquivo e calcula seu SHA-256;
+3. se o conteúdo já chegou antes, o processamento existente é reaproveitado;
+4. o trabalho entra em uma fila, sem deixar a requisição esperando o OCR ou o modelo responder;
+5. o extrator classifica o documento, coleta os campos e calcula a confiança;
+6. o resultado termina como concluído ou segue para conferência humana;
+7. a interface permite acompanhar, corrigir e consultar o que já foi processado.
+
+A gente focou no caminho feliz, mas tratou os problemas que aparecem na vida real. Uma chamada multimodal pode levar de 5 a 40 segundos, falhar ou simplesmente não responder. Por isso, a extração não acontece dentro da requisição de upload. Reenvios são deduplicados pelo conteúdo, não pelo nome do arquivo. A fila de conferência usa uma reserva temporária para dois atendentes não corrigirem o mesmo documento ao mesmo tempo.
+
+### As peças que usamos
+
+- **FastAPI, Pydantic e SQLAlchemy assíncrono:** API, validação e persistência.
+- **React, Tailwind CSS e Framer Motion:** interface de upload, acompanhamento, conferência, acervo e administração de usuários.
+- **PaddleOCR + OpenCV:** extração local, em CPU, sem mandar o documento para terceiros.
+- **OpenAI Vision:** estratégia opcional para comparação ou uso futuro. Ela fica desligada no modo local e exige uma chave própria.
+- **PostgreSQL, Redis/ARQ e S3:** caminho preparado para o ambiente completo, com banco gerenciado, fila durável e arquivos criptografados.
+- **SQLite e worker embutido:** usados somente no modo de demonstração e nos testes, para facilitar a avaliação local.
+- **JWT local e RBAC:** login individual no ambiente de demonstração. Em produção, o projeto continua preparado para OIDC.
+
+Não existe promessa mágica aqui: OCR erra, foto ruim continua sendo foto ruim e documento jurídico merece conferência quando houver dúvida. A fila humana faz parte da solução, não é um remendo.
+
+## Rodando na sua máquina sem brigar com o PowerShell
+
+O caminho abaixo é o mais simples para testar. Ele usa SQLite, armazenamento local e um consumidor embutido. Você não precisa subir PostgreSQL, Redis ou Docker para essa demonstração.
+
+### 1. Confira a versão do Python
+
+Use Python 3.11, 3.12 ou 3.13. O PaddlePaddle ainda não tem suporte para Python 3.14 neste projeto.
+
+```powershell
+py -0p
+```
+
+### 2. Entre na pasta certa
+
+Este passo evita o clássico erro de tentar criar o ambiente virtual dentro de `C:\Windows\System32`.
 
 ```powershell
 Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC"
-
-Copy-Item ".env.example" ".env" -Force
-& ".\.venv\Scripts\python.exe" -m pip install -r ".\requirements.txt"
-
-docker compose up -d
-& ".\.venv\Scripts\python.exe" -m alembic upgrade head
 ```
 
-Inicie a API:
+### 3. Crie o ambiente virtual e instale tudo
+
+Os comandos abaixo chamam o Python do ambiente diretamente. Assim, não dependemos da política de execução do `Activate.ps1`.
 
 ```powershell
-& ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8765 --env-file ".env"
+py -3.11 -m venv .venv311
+& ".\.venv311\Scripts\python.exe" -m pip install --upgrade pip
+& ".\.venv311\Scripts\python.exe" -m pip install -r ".\requirements.txt"
 ```
 
-Em outro PowerShell, inicie o worker independente:
+Na primeira execução do PaddleOCR, os modelos são baixados para o cache local. Isso pode levar alguns minutos. Depois que os arquivos estiverem no cache, a extração local não precisa enviar o documento para um provedor externo.
 
-```powershell
-Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC"
-& ".\.venv\Scripts\python.exe" -m arq app.worker.WorkerSettings
-```
+### 4. Configure o modo de demonstração
 
-Abra [http://127.0.0.1:8765](http://127.0.0.1:8765).
-
-Sem Docker, uma demonstração local pode usar SQLite, storage local e um consumidor embutido. Esse modo é exclusivo para dados fictícios e nunca substitui Redis/ARQ, PostgreSQL e S3/KMS em produção:
+Execute estes comandos na mesma janela do PowerShell:
 
 ```powershell
 $env:TESTING = "true"
@@ -56,143 +82,105 @@ $env:DEMO_AUTOPROCESS = "true"
 $env:DATABASE_URL = "sqlite+aiosqlite:///./data/ui-demo.db"
 $env:DATA_DIR = "./data/ui-demo-storage"
 $env:EXTRACTOR_STRATEGY = "local"
+$env:PROMPT_VERSION = "local_ocr_rules_v1"
+```
+
+### 5. Suba o back-end
+
+```powershell
 & ".\.venv311\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
-Nesse modo, o startup cria de forma idempotente o administrador `admin@doc.local`, com senha `admin`. Troque `DEFAULT_ADMIN_PASSWORD` e `JWT_SECRET_KEY` antes de usar um ambiente compartilhado. Administradores podem criar novos acessos pela área **Gerenciar acessos**.
+Se aparecer `Uvicorn running on http://127.0.0.1:8765`, está tudo certo. Deixe essa janela aberta.
 
-## Interface de atendimento
+O banco SQLite é criado automaticamente na pasta `data/`. O usuário administrador também é criado no primeiro startup:
 
-A SPA é servida pela própria API e oferece quatro áreas conforme o RBAC do usuário:
-
-- **Receber:** upload em lote por arrastar e soltar, validação local, até três envios simultâneos e indicação de duplicidade.
-- **Acompanhar:** visão operacional atualizada automaticamente com fila, processamento, falhas e itens aguardando conferência.
-- **Conferir:** documento original e campos extraídos lado a lado, reserva exclusiva do item, correção, aprovação ou rejeição.
-- **Acervo:** busca por nome, tipo e valores extraídos, filtros por canal/status e painel com original, resultado e rastreabilidade.
-
-Usuários demonstrativos do Keycloak:
-
-| Usuário | Senha | Permissões |
-|---|---|---|
-| `atendimento` | `Atendimento123!` | receber e ler |
-| `conferente` | `Conferente123!` | receber, ler e conferir |
-| `administrador` | `Administrador123!` | todas |
-
-Essas credenciais existem apenas para desenvolvimento e devem ser removidas fora do ambiente local.
-O MinIO local usa uma chave estática exclusivamente para exercitar SSE; produção exige KMS gerenciado.
-
-## Serviços gerenciados em produção
-
-Configure os mesmos contratos com serviços do provedor escolhido:
-
-```ini
-ENVIRONMENT=production
-DATABASE_URL=postgresql+asyncpg://usuario:senha@host:5432/docintelligence?ssl=require
-REDIS_URL=rediss://usuario:senha@host:6379/0
-S3_ENDPOINT_URL=
-S3_REGION=sa-east-1
-S3_BUCKET=empresa-doc-intelligence
-S3_SSE_ALGORITHM=aws:kms
-S3_SSE_KMS_KEY_ID=arn-ou-id-da-chave
-S3_AUTO_CREATE_BUCKET=false
-OIDC_ISSUER=https://identidade.empresa/realms/interno
-OIDC_AUDIENCE=doc-intelligence-api
-OIDC_CLIENT_ID=doc-intelligence-spa
-AUTH_DISABLED=false
-AUTH_PROVIDER=oidc
-AUDIT_HMAC_KEY=segredo-aleatorio-com-pelo-menos-32-caracteres
+```text
+E-mail: admin@doc.local
+Senha: admin
 ```
 
-A validação de startup impede produção com SQLite, autenticação desabilitada, chave de auditoria de desenvolvimento ou storage sem KMS.
+Essas credenciais são só para desenvolvimento. Se o ambiente for compartilhado com alguém, troque `DEFAULT_ADMIN_PASSWORD` e `JWT_SECRET_KEY`.
 
-## RBAC
+### 6. Abra o front-end
 
-| Role | Permissão |
-|---|---|
-| `document.submit` | enviar documentos |
-| `document.read` | listar, consultar e visualizar conteúdo |
-| `document.review` | reservar e conferir documentos |
-| `document.admin` | retry, retenção, legal hold, descarte e auditoria |
+O React já é servido pelo próprio FastAPI. Não existe um segundo servidor de front-end nem um `npm start` escondido nesta versão.
 
-O identificador do operador vem do claim `sub`; não é aceito do formulário ou do navegador.
+Abra:
 
-## Migrações
+[http://127.0.0.1:8765](http://127.0.0.1:8765)
+
+Não abra `static/index.html` diretamente com `file:///`. Nesse modo o navegador não conversa corretamente com a API e costuma mostrar `Failed to fetch`.
+
+### Se você quiser subir a arquitetura completa
+
+O modo acima é ótimo para demonstração. Para trabalhar com PostgreSQL, Redis, MinIO e Keycloak locais, use o ambiente Docker e aplique as migrações antes de iniciar a API:
 
 ```powershell
-& ".\.venv\Scripts\python.exe" -m alembic current
-& ".\.venv\Scripts\python.exe" -m alembic upgrade head
+Copy-Item ".env.example" ".env" -Force
+docker compose up -d
+& ".\.venv311\Scripts\python.exe" -m alembic upgrade head
+& ".\.venv311\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8765 --env-file ".env"
 ```
 
-A primeira migração cria documentos, tentativas, outbox, auditoria e execuções de avaliação. No PostgreSQL, um trigger impede update/delete da auditoria.
+O `.env.example` mantém o login JWT local por padrão. Para exercitar o Keycloak, altere `AUTH_PROVIDER` para `oidc` e use o emissor configurado no arquivo.
 
-## Avaliações do modelo
-
-Não versione amostras reais com PII. Monte o dataset em armazenamento controlado e execute:
+Em outro PowerShell, inicie o worker:
 
 ```powershell
-& ".\.venv\Scripts\python.exe" -m evals.runner ".\evals\datasets\golden-v1.json" --persist --output ".\data\eval-report.json"
-```
-
-O relatório contém acurácia de tipo, acurácia por campo, confiança média, taxa automática, falso aceite e recall da revisão, identificados por dataset, Strategy, modelo e prompt.
-
-Para gerar um dataset reproduzível de RGs totalmente fictícios e avaliar diretamente a estratégia OpenAI:
-
-```powershell
-& ".\.venv\Scripts\python.exe" ".\scripts\generate_mock_dataset.py" --count 20 --seed 20260902
-$env:OPENAI_API_KEY = "chave-do-projeto"
-& ".\.venv\Scripts\python.exe" ".\scripts\evaluate_model.py" --concurrency 2 --output ".\tests\dataset\reports\openai-gpt-4o.json"
-```
-
-O segundo comando faz uma chamada cobrada por imagem. As amostras têm marca d'água de documento fictício; os artefatos gerados ficam fora do Git e os gabaritos seguem exatamente o contrato do prompt v2. Use `--min-field-accuracy` e `--min-document-type-accuracy` como quality gates da CI.
-
-O workflow `DOC Intelligence synthetic evaluation` executa os testes sem custo em push e pull request. A etapa com o modelo real roda somente por acionamento manual no GitHub Actions e exige o secret `OPENAI_API_KEY`; o relatório fica disponível como artefato por 30 dias.
-
-## Extração local e offline
-
-O padrão do projeto é `EXTRACTOR_STRATEGY=local`: PaddleOCR em CPU, pré-processamento OpenCV e heurísticas versionadas. O runtime requer Python 3.11 a 3.13, pois o PaddlePaddle ainda não publica wheel para Python 3.14.
-
-```powershell
-py -3.11 -m venv .venv311
-& ".\.venv311\Scripts\python.exe" -m pip install -r ".\requirements.txt"
-$env:EXTRACTOR_STRATEGY = "local"
+Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC"
 & ".\.venv311\Scripts\python.exe" -m arq app.worker.WorkerSettings
 ```
 
-Na primeira preparação, o PaddleOCR baixa os pesos oficiais para o cache local. Depois disso, a inferência de imagens é offline e nenhum conteúdo documental é enviado a terceiros. Para uma instalação isolada da internet, copie previamente o cache de modelos para o host. PDFs usam `pdf2image`/Poppler na primeira página, com fallback local para PyMuPDF.
+Produção é outra conversa: ali o projeto exige PostgreSQL com TLS, Redis com TLS, arquivos protegidos por KMS e autenticação OIDC. SQLite e o usuário `admin` padrão não devem sair do ambiente de teste.
 
-O executor local usa um único job de OCR por processo por padrão, evitando saturar o i7 de quatro núcleos. Ajuste `LOCAL_OCR_CPU_THREADS` e `LOCAL_OCR_EXECUTOR_WORKERS` apenas após medir o dataset golden.
+## Como testar sem usar o RG de ninguém
 
-Avalie o OCR local contra os documentos fictícios sem custo de API:
+O que escolhemos testar e por quê: cobrimos o fluxo que mais pode causar problema operacional — upload, validação, deduplicação, autenticação, permissões, reserva concorrente da conferência, correção humana e descarte. Também validamos o contrato dos extratores e as métricas por campo. Esses testes dão segurança para mudar OCR, prompt ou modelo sem descobrir a regressão só depois que um atendente abrir um documento real.
+
+Rode a suíte automatizada com:
+
+```powershell
+& ".\.venv311\Scripts\python.exe" -m pytest -q
+```
+
+### Dataset sintético
+
+Documento pessoal real não deve ir para o repositório, para um print de bug ou para um dataset improvisado. Para testar a extração sem atropelar a LGPD, o projeto gera RGs fictícios com Faker e Pillow. A imagem recebe nomes, CPF, RG, datas e filiação inventados; ao lado dela fica um JSON com o gabarito exato.
+
+Coloque o fundo do documento fictício em `templates/rg_blank.jpg` e gere as amostras:
+
+```powershell
+& ".\.venv311\Scripts\python.exe" ".\scripts\generate_mock_dataset.py" --count 20 --seed 20260902
+```
+
+Depois, avalie o OCR local:
 
 ```powershell
 & ".\.venv311\Scripts\python.exe" ".\scripts\evaluate_model.py" --strategy local --concurrency 1
 ```
 
-## Extração multimodal com OpenAI
+O relatório mostra a taxa de acerto por campo. Isso é mais útil do que uma nota única: dá para saber, por exemplo, se o modelo está ótimo em CPF e ruim em nome da mãe.
 
-A chamada ao modelo acontece exclusivamente no worker ARQ. Para habilitar a estratégia real, configure o segredo fora do Git:
+Os arquivos gerados ficam em:
 
-```ini
-EXTRACTOR_STRATEGY=openai
-OPENAI_API_KEY=chave-do-projeto
-OPENAI_MODEL=gpt-4o
-OPENAI_TIMEOUT_SECONDS=50
-OPENAI_MAX_RETRIES=2
+```text
+tests/dataset/images/
+tests/dataset/ground_truth/
 ```
 
-A estratégia `openai` usa o prompt imutável `document_extraction_v2`, envia JPEG/PNG como data URL Base64 e converte somente a primeira página de PDFs para PNG. Timeout, rate limit, erro de transporte ou JSON inválido produzem confiança `0.0` e encaminhamento para conferência humana. O provedor deve estar formalmente aprovado como operador de dados antes do uso com documentos reais.
+Essas pastas devem continuar contendo somente material fictício. Sem exceção e sem aquele “é só para testar rapidinho”.
 
-## Verificação
+## Mapa rápido para quem vai mexer no código
 
-```powershell
-& ".\.venv\Scripts\python.exe" -m pytest -q
+```text
+app/                 API, autenticação, persistência, fila e extratores
+static/index.html    SPA React
+migrations/          revisões Alembic
+prompts/             prompts versionados
+scripts/             geração do dataset e avaliação
+tests/               testes automatizados e dados sintéticos
+docs/                arquitetura, ADRs e política LGPD
 ```
 
-Os testes usam SQLite e storage/fila em memória **somente como doubles de teste**. O runtime normal rejeita SQLite.
-
-## Documentação
-
-- [Arquitetura e fatos A–G](docs/ARCHITECTURE.md)
-- [Política operacional LGPD](docs/LGPD_POLICY.md)
-- [ADRs](docs/adrs)
-- [Avaliações](evals/README.md)
+Se você alterar Python, persistência, prompt ou contrato da API, rode `pytest -q`. Se mexer no banco, crie uma migração e confira o SQL do Alembic. Se trocar OCR, modelo ou prompt, rode o dataset sintético antes de chamar a mudança de melhoria.
