@@ -79,7 +79,8 @@ async def evaluate(dataset_path: Path, persist: bool = False) -> dict:
     dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
     cases = dataset.get("cases", [])
     extractor = build_extractor()
-    prompt = load_prompt(settings.prompt_version)
+    prompt_version = getattr(extractor, "prompt_version", settings.prompt_version)
+    prompt = load_prompt(prompt_version)
     results = []
 
     for case in cases:
@@ -106,7 +107,7 @@ async def evaluate(dataset_path: Path, persist: bool = False) -> dict:
         "dataset_version": dataset["version"],
         "strategy": extractor.strategy_name,
         "model_version": extractor.model_version,
-        "prompt_version": settings.prompt_version,
+        "prompt_version": prompt_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "metrics": metrics,
     }
@@ -117,7 +118,7 @@ async def evaluate(dataset_path: Path, persist: bool = False) -> dict:
                     dataset_version=dataset["version"],
                     strategy=extractor.strategy_name,
                     model_version=extractor.model_version,
-                    prompt_version=settings.prompt_version,
+                    prompt_version=prompt_version,
                     status=RunStatus.SUCCEEDED,
                     total_cases=len(results),
                     metrics=metrics,

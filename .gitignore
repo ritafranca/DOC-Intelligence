@@ -2,10 +2,16 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv311/
 .env
 data/
 evals/samples/
 evals/reports/
+tests/dataset/images/*
+!tests/dataset/images/.gitkeep
+tests/dataset/ground_truth/*
+!tests/dataset/ground_truth/.gitkeep
+tests/dataset/reports/
 *.db
 *.db-shm
 *.db-wal

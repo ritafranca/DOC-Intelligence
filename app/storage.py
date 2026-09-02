@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,3 +205,42 @@ class MemoryObjectStorage:
 
     async def delete(self, object_key: str) -> None:
         self.objects.pop(object_key, None)
+
+
+class LocalDemoObjectStorage:
+    """Storage persistente local, habilitado apenas no modo explícito de demonstração."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = (root or settings.data_dir / "objects").resolve()
+
+    def _path(self, object_key: str) -> Path:
+        target = (self.root / object_key).resolve()
+        if target != self.root and self.root not in target.parents:
+            raise ValueError("Chave de objeto inválida.")
+        return target
+
+    async def start(self) -> None:
+        await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
+
+    async def healthcheck(self) -> None:
+        if not self.root.is_dir():
+            raise RuntimeError("Storage local de demonstração indisponível.")
+
+    async def put_file(self, object_key: str, path: Path, _mime_type: str) -> None:
+        target = self._path(object_key)
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(shutil.copyfile, path, target)
+
+    async def get_bytes(self, object_key: str) -> bytes:
+        return await asyncio.to_thread(self._path(object_key).read_bytes)
+
+    async def download_file(self, object_key: str, destination: Path) -> None:
+        source = self._path(object_key)
+        await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(shutil.copyfile, source, destination)
+
+    async def delete(self, object_key: str) -> None:
+        await asyncio.to_thread(self._path(object_key).unlink, missing_ok=True)
+
+    async def exists(self, object_key: str) -> bool:
+        return await asyncio.to_thread(self._path(object_key).is_file)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ from app.dependencies import (
     get_current_principal,
     require_role,
 )
+from app.demo_worker import recover_pending_documents, run_demo_worker
 from app.governance import add_audit_event, digest_value, purge_document
 from app.models import AuditEvent, Document, DocumentStatus, EvaluationRun, OutboxEvent, ReviewDecision
 from app.queue import DurableDocumentQueue, MemoryDocumentQueue
@@ -40,16 +42,23 @@ from app.schemas import (
     ReviewSubmit,
     UploadResponse,
 )
-from app.storage import MemoryObjectStorage, S3ObjectStorage, make_object_key, receive_upload
+from app.storage import (
+    LocalDemoObjectStorage,
+    MemoryObjectStorage,
+    S3ObjectStorage,
+    make_object_key,
+    receive_upload,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_runtime()
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
+    demo_worker_task: asyncio.Task | None = None
     if settings.testing:
         await create_test_schema()
-        storage = MemoryObjectStorage()
+        storage = LocalDemoObjectStorage() if settings.demo_autoprocess else MemoryObjectStorage()
         queue = MemoryDocumentQueue()
     else:
         await verify_database()
@@ -59,9 +68,25 @@ async def lifespan(app: FastAPI):
     await queue.start()
     app.state.storage = storage
     app.state.queue = queue
-    yield
-    await queue.close()
-    await close_db()
+    if settings.testing and settings.demo_autoprocess:
+        assert isinstance(storage, LocalDemoObjectStorage)
+        assert isinstance(queue, MemoryDocumentQueue)
+        demo_worker_task = asyncio.create_task(
+            run_demo_worker(queue, storage),
+            name="doc-intelligence-demo-worker",
+        )
+        queue.set_consumer_task(demo_worker_task)
+        await recover_pending_documents(queue, storage)
+    app.state.demo_worker_task = demo_worker_task
+    try:
+        yield
+    finally:
+        if demo_worker_task:
+            demo_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await demo_worker_task
+        await queue.close()
+        await close_db()
 
 
 app = FastAPI(

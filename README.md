@@ -44,6 +44,19 @@ Set-Location -LiteralPath "C:\Users\maria\OneDrive\Documentos\ChatGPT\LEITOR-DOC
 
 Abra [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
+Sem Docker, uma demonstração local pode usar SQLite, storage local e um consumidor embutido. Esse modo é exclusivo para dados fictícios e nunca substitui Redis/ARQ, PostgreSQL e S3/KMS em produção:
+
+```powershell
+$env:TESTING = "true"
+$env:ENVIRONMENT = "test"
+$env:AUTH_DISABLED = "true"
+$env:DEMO_AUTOPROCESS = "true"
+$env:DATABASE_URL = "sqlite+aiosqlite:///./data/ui-demo.db"
+$env:DATA_DIR = "./data/ui-demo-storage"
+$env:EXTRACTOR_STRATEGY = "local"
+& ".\.venv311\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+```
+
 ## Interface de atendimento
 
 A SPA é servida pela própria API e oferece quatro áreas conforme o RBAC do usuário:
@@ -116,6 +129,53 @@ Não versione amostras reais com PII. Monte o dataset em armazenamento controlad
 ```
 
 O relatório contém acurácia de tipo, acurácia por campo, confiança média, taxa automática, falso aceite e recall da revisão, identificados por dataset, Strategy, modelo e prompt.
+
+Para gerar um dataset reproduzível de RGs totalmente fictícios e avaliar diretamente a estratégia OpenAI:
+
+```powershell
+& ".\.venv\Scripts\python.exe" ".\scripts\generate_mock_dataset.py" --count 20 --seed 20260902
+$env:OPENAI_API_KEY = "chave-do-projeto"
+& ".\.venv\Scripts\python.exe" ".\scripts\evaluate_model.py" --concurrency 2 --output ".\tests\dataset\reports\openai-gpt-4o.json"
+```
+
+O segundo comando faz uma chamada cobrada por imagem. As amostras têm marca d'água de documento fictício; os artefatos gerados ficam fora do Git e os gabaritos seguem exatamente o contrato do prompt v2. Use `--min-field-accuracy` e `--min-document-type-accuracy` como quality gates da CI.
+
+O workflow `DOC Intelligence synthetic evaluation` executa os testes sem custo em push e pull request. A etapa com o modelo real roda somente por acionamento manual no GitHub Actions e exige o secret `OPENAI_API_KEY`; o relatório fica disponível como artefato por 30 dias.
+
+## Extração local e offline
+
+O padrão do projeto é `EXTRACTOR_STRATEGY=local`: PaddleOCR em CPU, pré-processamento OpenCV e heurísticas versionadas. O runtime requer Python 3.11 a 3.13, pois o PaddlePaddle ainda não publica wheel para Python 3.14.
+
+```powershell
+py -3.11 -m venv .venv311
+& ".\.venv311\Scripts\python.exe" -m pip install -r ".\requirements.txt"
+$env:EXTRACTOR_STRATEGY = "local"
+& ".\.venv311\Scripts\python.exe" -m arq app.worker.WorkerSettings
+```
+
+Na primeira preparação, o PaddleOCR baixa os pesos oficiais para o cache local. Depois disso, a inferência de imagens é offline e nenhum conteúdo documental é enviado a terceiros. Para uma instalação isolada da internet, copie previamente o cache de modelos para o host. PDFs usam `pdf2image`/Poppler na primeira página, com fallback local para PyMuPDF.
+
+O executor local usa um único job de OCR por processo por padrão, evitando saturar o i7 de quatro núcleos. Ajuste `LOCAL_OCR_CPU_THREADS` e `LOCAL_OCR_EXECUTOR_WORKERS` apenas após medir o dataset golden.
+
+Avalie o OCR local contra os documentos fictícios sem custo de API:
+
+```powershell
+& ".\.venv311\Scripts\python.exe" ".\scripts\evaluate_model.py" --strategy local --concurrency 1
+```
+
+## Extração multimodal com OpenAI
+
+A chamada ao modelo acontece exclusivamente no worker ARQ. Para habilitar a estratégia real, configure o segredo fora do Git:
+
+```ini
+EXTRACTOR_STRATEGY=openai
+OPENAI_API_KEY=chave-do-projeto
+OPENAI_MODEL=gpt-4o
+OPENAI_TIMEOUT_SECONDS=50
+OPENAI_MAX_RETRIES=2
+```
+
+A estratégia `openai` usa o prompt imutável `document_extraction_v2`, envia JPEG/PNG como data URL Base64 e converte somente a primeira página de PDFs para PNG. Timeout, rate limit, erro de transporte ou JSON inválido produzem confiança `0.0` e encaminhamento para conferência humana. O provedor deve estar formalmente aprovado como operador de dados antes do uso com documentos reais.
 
 ## Verificação
 

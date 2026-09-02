@@ -1,5 +1,5 @@
 {
-  "version": "golden-v1",
+  "version": "golden-v2",
   "description": "Mantenha as imagens fora do Git em armazenamento controlado e monte-as ao executar.",
   "cases": [
     {
@@ -10,13 +10,16 @@
         "document_type": "RG",
         "extracted_data": {
           "nome": "NOME ESPERADO",
-          "filiacao": "FILIACAO ESPERADA",
-          "data_nascimento": "1990-01-31",
-          "numero": "000000000",
+          "nome_mae": "NOME DA MAE ESPERADO",
+          "nome_pai": "NOME DO PAI ESPERADO",
+          "cpf": "000.000.000-00",
+          "numero_rg": "000000000",
+          "naturalidade": "CIDADE - UF",
+          "data_nascimento": "31/01/1990",
+          "data_casamento": null,
           "orgao_emissor": "SSP"
         }
       }
     }
   ]
 }
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from arq import create_pool
@@ -49,6 +50,8 @@ class DurableDocumentQueue:
 class MemoryDocumentQueue:
     def __init__(self) -> None:
         self.enqueued: list[tuple[str, str]] = []
+        self._pending: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._consumer_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         return None
@@ -57,8 +60,22 @@ class MemoryDocumentQueue:
         return None
 
     async def healthcheck(self) -> None:
+        if self._consumer_task is not None and self._consumer_task.done():
+            raise RuntimeError("Consumidor da fila de demonstração não está ativo.")
         return None
 
     async def enqueue_outbox(self, event_id: str, document_id: str) -> None:
         self.enqueued.append((event_id, document_id))
+        await self._pending.put((event_id, document_id))
 
+    async def dequeue(self) -> tuple[str, str]:
+        return await self._pending.get()
+
+    def task_done(self) -> None:
+        self._pending.task_done()
+
+    async def requeue(self, document_id: str) -> None:
+        await self._pending.put((f"retry:{document_id}", document_id))
+
+    def set_consumer_task(self, task: asyncio.Task) -> None:
+        self._consumer_task = task

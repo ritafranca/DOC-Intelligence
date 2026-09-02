@@ -1,0 +1,7 @@
+DOC Intelligence — regras locais de OCR v1
+
+Pipeline: primeira página → escala de cinza → redução de ruído → CLAHE → Otsu → PaddleOCR CPU.
+Classificação: RG, CNH, certidão de nascimento, certidão de casamento ou outros por palavras-chave.
+Campos: nome, filiação, CPF, RG, naturalidade, datas e órgão emissor por rótulos e regex.
+Segurança: nenhuma imagem ou texto reconhecido é transmitido para serviços externos.
+Revisão: nome e CPF são críticos; a ausência de qualquer um limita a confiança abaixo de 0,85.

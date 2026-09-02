@@ -1,0 +1,73 @@
+name: DOC Intelligence synthetic evaluation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      sample_count:
+        description: Quantidade de RGs sintéticos para a avaliação paga
+        required: true
+        default: "10"
+      min_field_accuracy:
+        description: Acurácia mínima de cada campo preenchido
+        required: true
+        default: "0.80"
+      min_document_type_accuracy:
+        description: Acurácia mínima de classificação
+        required: true
+        default: "0.90"
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  real-model-evaluation:
+    if: github.event_name == 'workflow_dispatch'
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: gpt-4o
+      EVAL_CONCURRENCY: "2"
+      TESTING: "true"
+      ENVIRONMENT: test
+      AUTH_DISABLED: "true"
+      DATABASE_URL: sqlite+aiosqlite:///./data/evaluation.db
+      DATA_DIR: ./data/evaluation-storage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Verificar secret da OpenAI
+        shell: bash
+        run: test -n "$OPENAI_API_KEY" || (echo "Configure o secret OPENAI_API_KEY." >&2; exit 2)
+      - name: Gerar dataset sintético
+        run: python scripts/generate_mock_dataset.py --count "${{ inputs.sample_count }}" --seed 20260902
+      - name: Avaliar modelo e aplicar quality gates
+        run: >-
+          python scripts/evaluate_model.py
+          --output tests/dataset/reports/openai-gpt-4o.json
+          --min-field-accuracy "${{ inputs.min_field_accuracy }}"
+          --min-document-type-accuracy "${{ inputs.min_document_type_accuracy }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: doc-intelligence-model-evaluation
+          path: tests/dataset/reports/openai-gpt-4o.json
+          if-no-files-found: warn
+          retention-days: 30

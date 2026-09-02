@@ -10,3 +10,4 @@ As amostras contêm PII e **não devem ser versionadas no Git**. Monte o diretó
 
 Cada relatório identifica dataset, Strategy, modelo e prompt. Use o mesmo dataset golden para comparar versões antes de promover modelo ou prompt.
 
+O contrato candidato `document_extraction_v2` inclui RG, CNH e certidões de nascimento/casamento. Antes de alterar o padrão de produção, copie `datasets/template.json` para um manifesto golden controlado, monte as amostras fora do Git e execute a comparação com `PROMPT_VERSION=document_extraction_v2` e o mesmo modelo usado pela versão vigente.

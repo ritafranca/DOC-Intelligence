@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 
 from app.config import settings
 from app.database import SessionLocal, close_db, verify_database
-from app.extractor import build_extractor, load_prompt
+from app.extractor import add_filename_extension, build_extractor, load_prompt
 from app.governance import purge_expired_documents
 from app.models import Document, DocumentStatus, ExtractionRun, OutboxEvent, RunStatus
 from app.storage import ALLOWED_MIME_TYPES, S3ObjectStorage
@@ -24,7 +24,8 @@ async def startup(ctx: dict) -> None:
     await storage.start()
     ctx["storage"] = storage
     ctx["extractor"] = build_extractor()
-    ctx["prompt"] = load_prompt(settings.prompt_version)
+    ctx["prompt_version"] = getattr(ctx["extractor"], "prompt_version", settings.prompt_version)
+    ctx["prompt"] = load_prompt(ctx["prompt_version"])
 
 
 async def shutdown(_ctx: dict) -> None:
@@ -64,7 +65,7 @@ async def process_document(ctx: dict, document_id: str) -> None:
                 attempt_number=attempt,
                 strategy=ctx["extractor"].strategy_name,
                 model_version=ctx["extractor"].model_version,
-                prompt_version=settings.prompt_version,
+                prompt_version=ctx["prompt_version"],
                 status=RunStatus.STARTED,
             )
         )
@@ -97,11 +98,11 @@ async def process_document(ctx: dict, document_id: str) -> None:
                     document_type=result.document_type,
                     extracted_data=result.extracted_data,
                     confidence_score=result.confidence_score,
-                    filename_suggested=result.filename_suggested,
+                    filename_suggested=add_filename_extension(result.filename_suggested, mime_type),
                     status=final_status,
                     extractor_strategy=ctx["extractor"].strategy_name,
                     model_version=ctx["extractor"].model_version,
-                    prompt_version=settings.prompt_version,
+                    prompt_version=ctx["prompt_version"],
                     processed_at=finished,
                     updated_at=finished,
                 )
@@ -197,4 +198,3 @@ class WorkerSettings:
     job_timeout = int(settings.provider_timeout_seconds) + 30
     max_tries = settings.max_processing_attempts
     keep_result = 3600
-

@@ -4,8 +4,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def _as_bool(value: str | None, default: bool = False) -> bool:
@@ -19,6 +22,7 @@ class Settings:
     app_name: str = os.getenv("APP_NAME", "DOC Intelligence")
     environment: str = os.getenv("ENVIRONMENT", "development")
     testing: bool = _as_bool(os.getenv("TESTING"), False)
+    demo_autoprocess: bool = _as_bool(os.getenv("DEMO_AUTOPROCESS"), False)
 
     database_url: str = os.getenv(
         "DATABASE_URL",
@@ -58,7 +62,15 @@ class Settings:
     retention_days: int = int(os.getenv("RETENTION_DAYS", "365"))
     audit_hmac_key: str = os.getenv("AUDIT_HMAC_KEY", "dev-only-change-this-audit-key")
 
-    extractor_strategy: str = os.getenv("EXTRACTOR_STRATEGY", "mock")
+    extractor_strategy: str = os.getenv("EXTRACTOR_STRATEGY", "local")
+    local_ocr_lang: str = os.getenv("LOCAL_OCR_LANG", "pt")
+    local_ocr_cpu_threads: int = int(os.getenv("LOCAL_OCR_CPU_THREADS", "4"))
+    local_ocr_executor_workers: int = int(os.getenv("LOCAL_OCR_EXECUTOR_WORKERS", "1"))
+    local_ocr_poppler_path: str | None = os.getenv("LOCAL_OCR_POPPLER_PATH") or None
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    openai_timeout_seconds: float = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "50"))
+    openai_max_retries: int = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
     provider_url: str | None = os.getenv("LLM_PROVIDER_URL")
     provider_api_key: str | None = os.getenv("LLM_PROVIDER_API_KEY")
     provider_model: str = os.getenv("LLM_PROVIDER_MODEL", "vision-model-v1")
@@ -70,6 +82,8 @@ class Settings:
         return self.data_dir / "tmp"
 
     def validate_runtime(self) -> None:
+        if self.extractor_strategy == "openai" and not self.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY é obrigatória quando EXTRACTOR_STRATEGY=openai.")
         if self.environment == "production":
             if not self.database_url.startswith("postgresql+asyncpg://"):
                 raise RuntimeError("Produção exige DATABASE_URL postgresql+asyncpg.")
