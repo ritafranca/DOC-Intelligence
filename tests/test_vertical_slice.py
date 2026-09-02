@@ -70,6 +70,55 @@ def test_production_foundation_vertical_slice() -> None:
         assert client.get("/health").json()["status"] == "ok"
         config = client.get("/api/config").json()
         assert config["auth_disabled"] is True
+        assert config["auth_provider"] == "local"
+
+        invalid_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@doc.local", "password": "senha-incorreta"},
+        )
+        assert invalid_login.status_code == 401
+
+        admin_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "ADMIN@DOC.LOCAL", "password": "admin"},
+        )
+        assert admin_login.status_code == 200
+        assert admin_login.json()["token_type"] == "bearer"
+        assert admin_login.json()["user"]["role"] == "ADMIN"
+        assert admin_login.json()["access_token"]
+
+        forbidden_register = client.post(
+            "/api/v1/auth/register",
+            headers=auth(roles="document.read"),
+            json={
+                "name": "Operadora Teste",
+                "email": "operadora@doc.local",
+                "password": "teste123",
+                "role": "OPERATOR",
+            },
+        )
+        assert forbidden_register.status_code == 403
+
+        registered = client.post(
+            "/api/v1/auth/register",
+            headers=auth("admin"),
+            json={
+                "name": "Operadora Teste",
+                "email": "operadora@doc.local",
+                "password": "teste123",
+                "role": "OPERATOR",
+            },
+        )
+        assert registered.status_code == 201
+        assert registered.json()["role"] == "OPERATOR"
+        assert "hashed_password" not in registered.json()
+
+        operator_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "operadora@doc.local", "password": "teste123"},
+        )
+        assert operator_login.status_code == 200
+        assert operator_login.json()["user"]["role"] == "OPERATOR"
 
         forbidden = client.post(
             "/api/v1/documents",
@@ -195,6 +244,8 @@ def test_production_foundation_vertical_slice() -> None:
         assert login.status_code == 200
         assert "Bem-vindo ao" in login.text
         assert "handleLogout" in login.text
+        assert "Gerenciar acessos" in login.text
+        assert "authToken" in login.text
 
 
 def awaitable_storage_count(client: TestClient) -> int:

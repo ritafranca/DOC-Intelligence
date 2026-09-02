@@ -8,7 +8,7 @@ Serviço interno de inteligência documental com PostgreSQL, object storage crip
 - **Banco:** PostgreSQL gerenciado via SQLAlchemy Async/asyncpg.
 - **Arquivos:** S3 compatível, sempre com SSE; produção exige KMS.
 - **Fila:** Redis persistente + ARQ. API e workers são processos separados.
-- **Identidade:** OIDC Authorization Code + PKCE na SPA; JWT e roles validados novamente na API.
+- **Identidade:** JWT local com usuários persistidos no desenvolvimento; OIDC Authorization Code + PKCE em produção.
 - **Schema:** somente Alembic altera o banco do runtime.
 - **Governança:** retenção, legal hold, descarte e auditoria append-only.
 - **Qualidade:** datasets golden com métricas por campo/modelo/prompt.
@@ -49,13 +49,17 @@ Sem Docker, uma demonstração local pode usar SQLite, storage local e um consum
 ```powershell
 $env:TESTING = "true"
 $env:ENVIRONMENT = "test"
-$env:AUTH_DISABLED = "true"
+$env:AUTH_DISABLED = "false"
+$env:AUTH_PROVIDER = "local"
+$env:JWT_SECRET_KEY = "dev-only-change-this-jwt-secret-now"
 $env:DEMO_AUTOPROCESS = "true"
 $env:DATABASE_URL = "sqlite+aiosqlite:///./data/ui-demo.db"
 $env:DATA_DIR = "./data/ui-demo-storage"
 $env:EXTRACTOR_STRATEGY = "local"
 & ".\.venv311\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
+
+Nesse modo, o startup cria de forma idempotente o administrador `admin@doc.local`, com senha `admin`. Troque `DEFAULT_ADMIN_PASSWORD` e `JWT_SECRET_KEY` antes de usar um ambiente compartilhado. Administradores podem criar novos acessos pela área **Gerenciar acessos**.
 
 ## Interface de atendimento
 
@@ -95,6 +99,7 @@ OIDC_ISSUER=https://identidade.empresa/realms/interno
 OIDC_AUDIENCE=doc-intelligence-api
 OIDC_CLIENT_ID=doc-intelligence-spa
 AUTH_DISABLED=false
+AUTH_PROVIDER=oidc
 AUDIT_HMAC_KEY=segredo-aleatorio-com-pelo-menos-32-caracteres
 ```
 

@@ -12,8 +12,9 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import authenticate_user, create_access_token, ensure_default_admin, hash_password
 from app.config import BASE_DIR, settings
-from app.database import close_db, create_test_schema, get_session, verify_database
+from app.database import SessionLocal, close_db, create_test_schema, get_session, verify_database
 from app.dependencies import (
     ROLE_ADMIN,
     ROLE_READ,
@@ -25,7 +26,7 @@ from app.dependencies import (
 )
 from app.demo_worker import recover_pending_documents, run_demo_worker
 from app.governance import add_audit_event, digest_value, purge_document
-from app.models import AuditEvent, Document, DocumentStatus, EvaluationRun, OutboxEvent, ReviewDecision
+from app.models import AuditEvent, Document, DocumentStatus, EvaluationRun, OutboxEvent, ReviewDecision, User
 from app.queue import DurableDocumentQueue, MemoryDocumentQueue
 from app.schemas import (
     AuditEventRead,
@@ -34,13 +35,17 @@ from app.schemas import (
     DocumentRead,
     EvaluationRunRead,
     HealthResponse,
+    LoginRequest,
+    LoginResponse,
     PrincipalRead,
     PublicConfig,
     PurgeRequest,
     QueueSummary,
     RetentionUpdate,
+    RegisterRequest,
     ReviewSubmit,
     UploadResponse,
+    UserRead,
 )
 from app.storage import (
     LocalDemoObjectStorage,
@@ -64,6 +69,9 @@ async def lifespan(app: FastAPI):
         await verify_database()
         storage = S3ObjectStorage()
         queue = DurableDocumentQueue()
+    if settings.auth_provider == "local":
+        async with SessionLocal() as session:
+            await ensure_default_admin(session)
     await storage.start()
     await queue.start()
     app.state.storage = storage
@@ -135,6 +143,7 @@ async def delete_object_safely(storage, object_key: str | None) -> None:
 async def public_config() -> PublicConfig:
     return PublicConfig(
         auth_disabled=settings.auth_disabled,
+        auth_provider=settings.auth_provider,
         oidc_issuer=settings.oidc_issuer,
         oidc_client_id=settings.oidc_client_id,
         oidc_scopes=settings.oidc_scopes,
@@ -148,7 +157,52 @@ async def me(principal: Principal = Depends(get_current_principal)) -> Principal
         email=principal.email,
         name=principal.name,
         roles=sorted(principal.roles),
+        role=principal.role,
     )
+
+
+@api.post("/auth/login", response_model=LoginResponse)
+async def login(
+    body: LoginRequest,
+    session: AsyncSession = Depends(get_session),
+) -> LoginResponse:
+    if settings.auth_provider != "local":
+        raise HTTPException(status_code=409, detail="O login local não está habilitado.")
+    user = await authenticate_user(session, body.email, body.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="E-mail ou senha inválidos.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token, expires_in = create_access_token(user)
+    return LoginResponse(
+        access_token=token,
+        expires_in=expires_in,
+        user=UserRead.model_validate(user),
+    )
+
+
+@api.post("/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+async def register_user(
+    body: RegisterRequest,
+    session: AsyncSession = Depends(get_session),
+    _principal: Principal = Depends(require_role(ROLE_ADMIN)),
+) -> UserRead:
+    user = User(
+        name=body.name,
+        email=body.email,
+        hashed_password=hash_password(body.password),
+        role=body.role,
+    )
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Já existe um usuário com este e-mail.") from exc
+    await session.refresh(user)
+    return UserRead.model_validate(user)
 
 
 @app.get("/health", response_model=HealthResponse)

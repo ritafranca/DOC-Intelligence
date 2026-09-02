@@ -7,7 +7,67 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import DocumentStatus, ReviewDecision, RunStatus
+from app.models import DocumentStatus, ReviewDecision, RunStatus, UserRole
+
+
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def normalize_and_validate_email(value: str) -> str:
+    normalized = value.strip().lower()
+    if len(normalized) > 255 or not EMAIL_PATTERN.fullmatch(normalized):
+        raise ValueError("E-mail inválido.")
+    return normalized
+
+
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    email: str
+    role: UserRole
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=1, max_length=72)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        return normalize_and_validate_email(value)
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    email: str
+    password: str = Field(min_length=5, max_length=72)
+    role: UserRole = UserRole.OPERATOR
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        return normalize_and_validate_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def bcrypt_size_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("A senha deve ter no máximo 72 bytes.")
+        return value
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserRead
 
 
 class PrincipalRead(BaseModel):
@@ -15,10 +75,12 @@ class PrincipalRead(BaseModel):
     email: str | None
     name: str | None
     roles: list[str]
+    role: UserRole | None = None
 
 
 class PublicConfig(BaseModel):
     auth_disabled: bool
+    auth_provider: str
     oidc_issuer: str
     oidc_client_id: str
     oidc_scopes: str

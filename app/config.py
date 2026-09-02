@@ -46,6 +46,15 @@ class Settings:
     s3_auto_create_bucket: bool = _as_bool(os.getenv("S3_AUTO_CREATE_BUCKET"), True)
 
     auth_disabled: bool = _as_bool(os.getenv("AUTH_DISABLED"), False)
+    auth_provider: str = os.getenv("AUTH_PROVIDER", "local").strip().lower()
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-jwt-secret-now")
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    jwt_access_token_minutes: int = int(os.getenv("JWT_ACCESS_TOKEN_MINUTES", "480"))
+    jwt_issuer: str = os.getenv("JWT_ISSUER", "doc-intelligence")
+    jwt_audience: str = os.getenv("JWT_AUDIENCE", "doc-intelligence-spa")
+    default_admin_name: str = os.getenv("DEFAULT_ADMIN_NAME", "Administrador")
+    default_admin_email: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@doc.local")
+    default_admin_password: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin")
     oidc_issuer: str = os.getenv("OIDC_ISSUER", "http://127.0.0.1:8080/realms/doc-intelligence")
     oidc_audience: str = os.getenv("OIDC_AUDIENCE", "doc-intelligence-api")
     oidc_client_id: str = os.getenv("OIDC_CLIENT_ID", "doc-intelligence-spa")
@@ -82,6 +91,10 @@ class Settings:
         return self.data_dir / "tmp"
 
     def validate_runtime(self) -> None:
+        if self.auth_provider not in {"local", "oidc"}:
+            raise RuntimeError("AUTH_PROVIDER deve ser local ou oidc.")
+        if self.auth_provider == "local" and self.jwt_algorithm != "HS256":
+            raise RuntimeError("A autenticação local suporta somente JWT_ALGORITHM=HS256.")
         if self.extractor_strategy == "openai" and not self.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY é obrigatória quando EXTRACTOR_STRATEGY=openai.")
         if self.environment == "production":
@@ -93,6 +106,8 @@ class Settings:
                 raise RuntimeError("Produção exige Redis com TLS (rediss://).")
             if self.auth_disabled:
                 raise RuntimeError("AUTH_DISABLED não pode ser usado em produção.")
+            if self.auth_provider != "oidc":
+                raise RuntimeError("Produção exige AUTH_PROVIDER=oidc.")
             if not self.oidc_issuer.startswith("https://"):
                 raise RuntimeError("Produção exige OIDC_ISSUER com HTTPS.")
             if len(self.audit_hmac_key) < 32 or self.audit_hmac_key.startswith("dev-only"):

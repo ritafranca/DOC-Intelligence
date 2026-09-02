@@ -38,6 +38,28 @@ class ReviewDecision(str, enum.Enum):
     REJECT = "REJECT"
 
 
+class UserRole(str, enum.Enum):
+    ADMIN = "ADMIN"
+    OPERATOR = "OPERATOR"
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (Index("ix_users_email_unique", "email", unique=True),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="userrole", native_enum=False, length=20, create_constraint=True),
+        default=UserRole.OPERATOR,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (

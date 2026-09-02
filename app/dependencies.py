@@ -9,8 +9,12 @@ import httpx
 import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import decode_access_token, permissions_for_role
 from app.config import settings
+from app.database import get_session
+from app.models import User, UserRole
 
 
 ROLE_SUBMIT = "document.submit"
@@ -25,6 +29,7 @@ class Principal:
     email: str | None
     name: str | None
     roles: frozenset[str]
+    role: UserRole | None = None
 
     def has_role(self, role: str) -> bool:
         return ROLE_ADMIN in self.roles or role in self.roles
@@ -91,10 +96,46 @@ def _extract_roles(claims: dict) -> frozenset[str]:
     return frozenset(str(role) for role in roles)
 
 
+def _authentication_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token inválido ou expirado.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def _resolve_local_user(
+    credentials: HTTPAuthorizationCredentials | None,
+    session: AsyncSession,
+) -> User:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Autenticação obrigatória.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        claims = decode_access_token(credentials.credentials)
+        user = await session.get(User, str(claims["sub"]))
+    except Exception as exc:
+        raise _authentication_error() from exc
+    if not user:
+        raise _authentication_error()
+    return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    return await _resolve_local_user(credentials, session)
+
+
 async def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     x_dev_user: str | None = Header(default=None),
     x_dev_roles: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
 ) -> Principal:
     if settings.auth_disabled:
         if settings.environment == "production":
@@ -112,6 +153,16 @@ async def get_current_principal(
             email=f"{(x_dev_user or 'dev.operator').strip()}@local",
             name="Operador de desenvolvimento",
             roles=roles,
+            role=UserRole.ADMIN if ROLE_ADMIN in roles else UserRole.OPERATOR,
+        )
+    if settings.auth_provider == "local":
+        user = await _resolve_local_user(credentials, session)
+        return Principal(
+            subject=user.id,
+            email=user.email,
+            name=user.name,
+            roles=permissions_for_role(user.role),
+            role=user.role,
         )
     if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(
@@ -132,6 +183,11 @@ async def get_current_principal(
         email=claims.get("email"),
         name=claims.get("name") or claims.get("preferred_username"),
         roles=_extract_roles(claims),
+        role=(
+            UserRole.ADMIN
+            if ROLE_ADMIN in _extract_roles(claims)
+            else UserRole.OPERATOR
+        ),
     )
 
 
@@ -142,4 +198,3 @@ def require_role(role: str):
         return principal
 
     return dependency
-
