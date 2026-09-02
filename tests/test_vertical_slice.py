@@ -191,6 +191,10 @@ def test_production_foundation_vertical_slice() -> None:
         assert "Triagem ativa" in spa.text
         assert "Detalhes do documento" in spa.text
         assert 'type="file" multiple' in spa.text
+        login = client.get("/login")
+        assert login.status_code == 200
+        assert "Bem-vindo ao" in login.text
+        assert "handleLogout" in login.text
 
 
 def awaitable_storage_count(client: TestClient) -> int:

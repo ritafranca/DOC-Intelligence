@@ -648,6 +648,7 @@ async def list_evaluation_runs(
 app.include_router(api)
 
 
+@app.get("/login", include_in_schema=False)
 @app.get("/", include_in_schema=False)
 async def spa_index() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "index.html", media_type="text/html")

@@ -61,6 +61,11 @@
       100% { opacity: 1; transform: scale(1); }
     }
     @keyframes progressSweep { from { transform: translateX(-100%); } to { transform: translateX(160%); } }
+    @keyframes scanDocument {
+      0%, 100% { top: 18%; opacity: .55; }
+      50% { top: 76%; opacity: 1; }
+    }
+    @keyframes toastTimer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
     .spin { animation: spin 1s linear infinite; }
     .enter { animation: enter .24s ease-out both; }
     .drawer-enter { animation: slideIn .24s ease-out both; }
@@ -68,6 +73,8 @@
     .upload-progress { animation: progressSweep 1.35s ease-in-out infinite; }
     .dropzone-idle { animation: quietGlow 4.5s ease-in-out infinite; }
     .dropzone-active { box-shadow: inset 0 0 0 1px rgba(212,175,55,.32), 0 20px 70px rgba(212,175,55,.09); }
+    .scanner-line { animation: scanDocument 1.45s ease-in-out infinite; }
+    .toast-timer { animation: toastTimer 4.5s linear forwards; transform-origin: left; }
     .focus-ring:focus-visible { outline: 2px solid rgba(212,175,55,.82); outline-offset: 3px; }
     .document-canvas { background-color: #161616; background-image: radial-gradient(#3b382f 1px, transparent 1px); background-size: 18px 18px; }
     .luxury-rule { background: linear-gradient(90deg, transparent, rgba(212,175,55,.72), transparent); }
@@ -102,6 +109,7 @@
       .review-grid { grid-template-columns: 1fr !important; }
       .review-preview { border-right: 0 !important; border-bottom: 1px solid #38342A; }
       .desk-metrics { display: none !important; }
+      .login-visual { min-height: 42vh; }
     }
     @media (max-width: 640px) {
       .page-pad { padding: 20px 16px !important; }
@@ -117,16 +125,22 @@
     import React, { useCallback, useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@19.1.1';
     import { createRoot } from 'https://esm.sh/react-dom@19.1.1/client';
     import htm from 'https://esm.sh/htm@3.1.1';
+    import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'https://esm.sh/react-router-dom@7.8.2?deps=react@19.1.1,react-dom@19.1.1';
+    import { AnimatePresence, motion } from 'https://esm.sh/framer-motion@11.18.2?deps=react@19.1.1,react-dom@19.1.1';
     import { UserManager, WebStorageStateStore } from 'https://esm.sh/oidc-client-ts@3.3.0';
     import {
       Activity, AlertCircle, AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight,
       ClipboardCheck, Clock3, Download, ExternalLink, Eye, FileCheck2, FileImage, FileSearch,
       Files, Filter, Inbox, Layers3, LoaderCircle, LogIn, LogOut, LockKeyhole, Mail, MoreHorizontal,
       Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, UploadCloud, UserRound,
-      X, XCircle, Zap
+      X, XCircle, Zap, EyeOff, KeyRound, AtSign
     } from 'https://esm.sh/lucide-react@0.468.0';
 
     const html = htm.bind(React.createElement);
+    const MotionArticle = motion.article;
+    const MotionButton = motion.button;
+    const MotionDiv = motion.div;
+    const MotionTr = motion.tr;
     const TERMINAL = new Set(['COMPLETED', 'NEEDS_REVIEW', 'FAILED', 'PURGED']);
     const STATUS = {
       PENDING: { label: 'Na fila', className: 'bg-white/5 text-[#B9B4AA] border-white/10', icon: Clock3 },
@@ -165,11 +179,43 @@
       return mimeType === 'application/pdf' ? html`<${Files} size=${size} />` : html`<${FileImage} size=${size} />`;
     }
 
+    function readStoredJson(key) {
+      try { return JSON.parse(localStorage.getItem(key) || 'null'); }
+      catch (_) { localStorage.removeItem(key); return null; }
+    }
+
+    function initials(name = '') {
+      const parts = name.trim().split(/\s+/).filter(Boolean);
+      return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)[0]}` : parts[0]?.slice(0, 2) || 'DI').toUpperCase();
+    }
+
+    function ScannerDocument({ size = 20 }) {
+      return html`<span className="relative inline-grid shrink-0 place-items-center overflow-hidden text-gold" style=${{ width: size, height: size }} aria-label="Documento em leitura OCR">
+        <${FileSearch} size=${size} strokeWidth=${1.65} />
+        <span className="scanner-line absolute left-[12%] h-px w-[76%] bg-gold shadow-[0_0_7px_rgba(212,175,55,.95)]"></span>
+      </span>`;
+    }
+
+    function Skeleton({ className = '' }) {
+      return html`<div className=${`animate-pulse rounded-md bg-[#2A2A2A] ${className}`} aria-hidden="true"></div>`;
+    }
+
+    function ToastStack({ toasts, dismiss }) {
+      return html`<div className="pointer-events-none fixed right-4 top-4 z-[80] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-3" aria-live="polite" aria-atomic="true">
+        <${AnimatePresence}>
+          ${toasts.map(toast => html`<${MotionDiv} key=${toast.id} initial=${{ opacity: 0, x: 36, scale: .97 }} animate=${{ opacity: 1, x: 0, scale: 1 }} exit=${{ opacity: 0, x: 28, scale: .97 }} transition=${{ duration: .25 }} className="pointer-events-auto relative overflow-hidden rounded-xl border border-white/10 border-l-[3px] border-l-gold bg-[#242424] px-4 py-3 shadow-lg shadow-black/50">
+            <div className="flex items-start gap-3"><div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gold/10 text-gold"><${Check} size=${15} /></div><div className="min-w-0 flex-1"><div className="text-xs font-bold text-[#ECE9E2]">${toast.title || 'Ação concluída'}</div><div className="mt-1 text-[11px] leading-5 text-[#A8A39A]">${toast.message}</div></div><button type="button" aria-label="Fechar notificação" onClick=${() => dismiss(toast.id)} className="focus-ring rounded p-1 text-[#777168] hover:text-[#E0E0E0]"><${X} size=${14} /></button></div>
+            <div className="toast-timer absolute bottom-0 left-0 h-px w-full bg-gold/70"></div>
+          </${MotionDiv}>`)}
+        </${AnimatePresence}>
+      </div>`;
+    }
+
     function StatusBadge({ status }) {
       const item = STATUS[status] || STATUS.PENDING;
       const Icon = item.icon;
       return html`<span className=${`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${item.className}`}>
-        <${Icon} size=${13} className=${status === 'PROCESSING' ? 'spin' : ''} />${item.label}
+        ${status === 'PROCESSING' ? html`<${ScannerDocument} size=${13} />` : html`<${Icon} size=${13} />`}${item.label}
       </span>`;
     }
 
@@ -223,16 +269,16 @@
       </aside>`;
     }
 
-    function Metric({ label, value, icon: Icon }) {
-      return html`<div className="group min-w-[150px] rounded-xl border border-white/[.07] bg-surface px-4 py-3 shadow-panel transition duration-200 hover:border-gold/25">
-        <div className="flex items-center justify-between gap-4"><div><div className="text-[9px] font-bold uppercase tracking-[.18em] text-[#8D887F]">${label}</div><div className="mt-1 text-2xl font-semibold tabular-nums text-gold">${value}</div></div><div className="grid h-9 w-9 place-items-center rounded-lg border border-gold/15 bg-gold/[.06] text-gold/80"><${Icon} size=${16} strokeWidth=${1.7} /></div></div>
+    function Metric({ label, value, icon: Icon, loading = false }) {
+      return html`<div className="group min-w-[150px] rounded-xl border border-white/[.07] bg-surface px-4 py-3 shadow-lg shadow-black/50 transition duration-200 hover:border-gold/25">
+        <div className="flex items-center justify-between gap-4"><div className="min-w-[76px]"><div className="text-[9px] font-bold uppercase tracking-[.18em] text-[#8D887F]">${label}</div>${loading ? html`<${Skeleton} className="mt-2 h-7 w-12" />` : html`<div className="mt-1 text-2xl font-semibold tabular-nums text-gold">${value}</div>`}</div><div className="grid h-9 w-9 place-items-center rounded-lg border border-gold/15 bg-gold/[.06] text-gold/80"><${Icon} size=${16} strokeWidth=${1.7} /></div></div>
       </div>`;
     }
 
-    function UploadView({ api, onUploaded, onTrack }) {
+    function UploadView({ api, onUploaded, onTrack, notify }) {
       const [files, setFiles] = useState([]);
       const [channel, setChannel] = useState('whatsapp');
-      const [dragging, setDragging] = useState(false);
+      const [isDragActive, setIsDragActive] = useState(false);
       const [sending, setSending] = useState(false);
       const inputRef = useRef(null);
 
@@ -263,19 +309,23 @@
           try {
             const result = await api('/api/v1/documents', { method: 'POST', body: data });
             setFiles(current => current.map(entry => entry.id === item.id ? { ...entry, state: result.duplicate ? 'duplicate' : 'done', message: result.duplicate ? 'Reenvio identificado; processamento existente reutilizado.' : 'Recebido e encaminhado para processamento.', document: result.document, duplicate: result.duplicate } : entry));
+            return true;
           } catch (error) {
             setFiles(current => current.map(entry => entry.id === item.id ? { ...entry, state: 'error', message: error.message } : entry));
+            return false;
           }
         };
+        let uploadedCount = 0;
         const worker = async () => {
           while (cursor < pending.length) {
             const item = pending[cursor++];
-            await uploadOne(item);
+            if (await uploadOne(item)) uploadedCount += 1;
           }
         };
         await Promise.all(Array.from({ length: Math.min(3, pending.length) }, worker));
         setSending(false);
         await onUploaded();
+        if (uploadedCount) notify('Documentos protocolados', `${uploadedCount} documento(s) encaminhado(s) para extração.`);
       };
 
       const readyCount = files.filter(item => item.state === 'ready' || item.state === 'error').length;
@@ -292,9 +342,9 @@
           </label>
         </div>
 
-        <div role="button" tabIndex="0" aria-label="Anexar autos ou documentos" onKeyDown=${e => { if (['Enter', ' '].includes(e.key)) inputRef.current?.click(); }} onDragOver=${e => { e.preventDefault(); setDragging(true); }} onDragLeave=${e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); }} onDrop=${e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} className=${`focus-ring drop-grid relative isolate overflow-hidden rounded-2xl border-2 p-10 text-center transition-all duration-300 sm:p-14 ${dragging ? 'dropzone-active scale-[1.006] border-solid border-gold bg-gold/[.08]' : 'dropzone-idle border-dashed border-gold/55 bg-surface hover:border-gold/80 hover:bg-[#211F1A]'}`}>
-          <div className=${`pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(212,175,55,.09),transparent_60%)] transition-opacity duration-300 ${dragging ? 'opacity-100' : 'opacity-25'}`}></div>
-          <div className="relative z-10"><div className=${`mx-auto mb-5 grid h-20 w-20 place-items-center rounded-2xl border text-gold transition-all duration-300 ${dragging ? 'scale-110 border-gold bg-gold/15 shadow-[0_0_38px_rgba(212,175,55,.18)]' : 'border-gold/25 bg-gold/[.07]'}`}><${UploadCloud} size=${32} strokeWidth=${1.6} /></div><p className="text-[10px] font-bold uppercase tracking-[.22em] text-gold/80">Anexar autos / documentos</p><h3 className="mt-3 text-xl font-semibold tracking-tight text-[#ECE9E2] sm:text-2xl">${dragging ? 'Solte para incluir na triagem' : 'Arraste os arquivos para esta área'}</h3><p className="mt-2 text-sm text-[#8F8A82]">PDF, JPEG ou PNG · até 20 MB por arquivo · envio em lote</p><div className="my-6 flex items-center justify-center gap-3"><span className="h-px w-12 bg-white/10"></span><span className="text-[9px] font-bold uppercase tracking-[.18em] text-[#625E57]">ou</span><span className="h-px w-12 bg-white/10"></span></div><button type="button" onClick=${e => { e.stopPropagation(); inputRef.current?.click(); }} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-gold px-5 py-3 text-xs font-extrabold text-[#121212] shadow-[0_10px_30px_rgba(212,175,55,.12)] transition duration-200 hover:bg-[#E3C55C] hover:shadow-[0_12px_36px_rgba(212,175,55,.22)]"><${Plus} size=${16} strokeWidth=${2.2} /> Selecionar documentos</button><input ref=${inputRef} type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange=${e => addFiles(e.target.files)} /></div>
+        <div role="button" tabIndex="0" aria-label="Anexar autos ou documentos" onKeyDown=${e => { if (['Enter', ' '].includes(e.key)) inputRef.current?.click(); }} onDragOver=${e => { e.preventDefault(); setIsDragActive(true); }} onDragLeave=${e => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragActive(false); }} onDrop=${e => { e.preventDefault(); setIsDragActive(false); addFiles(e.dataTransfer.files); }} className=${`focus-ring drop-grid relative isolate overflow-hidden rounded-2xl border-2 p-10 text-center transition-all duration-300 sm:p-14 ${isDragActive ? 'dropzone-active scale-[1.006] border-solid border-gold bg-yellow-900/10' : 'dropzone-idle border-dashed border-gold/55 bg-surface hover:border-gold/80 hover:bg-[#211F1A]'}`}>
+          <div className=${`pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(212,175,55,.09),transparent_60%)] transition-opacity duration-300 ${isDragActive ? 'opacity-100' : 'opacity-25'}`}></div>
+          <div className="relative z-10"><div className=${`mx-auto mb-5 grid h-20 w-20 place-items-center rounded-2xl border text-gold transition-all duration-300 ${isDragActive ? 'scale-110 border-gold bg-gold/15 shadow-[0_0_38px_rgba(212,175,55,.18)]' : 'border-gold/25 bg-gold/[.07]'}`}><${UploadCloud} size=${32} strokeWidth=${1.6} /></div><p className="text-[10px] font-bold uppercase tracking-[.22em] text-gold/80">Anexar autos / documentos</p><h3 className="mt-3 text-xl font-semibold tracking-tight text-[#ECE9E2] sm:text-2xl">${isDragActive ? 'Solte para incluir na triagem' : 'Arraste os arquivos para esta área'}</h3><p className="mt-2 text-sm text-[#8F8A82]">PDF, JPEG ou PNG · até 20 MB por arquivo · envio em lote</p><div className="my-6 flex items-center justify-center gap-3"><span className="h-px w-12 bg-white/10"></span><span className="text-[9px] font-bold uppercase tracking-[.18em] text-[#625E57]">ou</span><span className="h-px w-12 bg-white/10"></span></div><button type="button" onClick=${e => { e.stopPropagation(); inputRef.current?.click(); }} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-gold px-5 py-3 text-xs font-extrabold text-[#121212] shadow-[0_10px_30px_rgba(212,175,55,.12)] transition duration-200 hover:bg-[#E3C55C] hover:shadow-[0_12px_36px_rgba(212,175,55,.22)]"><${Plus} size=${16} strokeWidth=${2.2} /> Selecionar documentos</button><input ref=${inputRef} type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange=${e => addFiles(e.target.files)} /></div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[10px] font-medium text-[#777168]"><span className="inline-flex items-center gap-1.5"><${LockKeyhole} size=${12} className="text-gold/70" /> Processamento protegido</span><span className="inline-flex items-center gap-1.5"><${RefreshCw} size=${12} className="text-gold/70" /> Duplicidades identificadas</span><span className="inline-flex items-center gap-1.5"><${ClipboardCheck} size=${12} className="text-gold/70" /> Conferência humana quando necessária</span></div>
@@ -337,16 +387,16 @@
         <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-[10px] font-bold uppercase tracking-[.2em] text-gold">Operação em tempo real</p><h2 className="text-3xl font-semibold tracking-tight text-[#ECE9E2]">Triagem ativa</h2><p className="mt-2 text-sm text-muted">Acompanhe a classificação das provas e documentos anexados aos atendimentos.</p></div><button type="button" onClick=${refresh} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-gold/20 bg-surface px-4 py-2.5 text-xs font-semibold text-[#C8C3B9] transition hover:border-gold/45 hover:text-gold"><${RefreshCw} size=${15} className=${loading ? 'spin' : ''} /> Atualizar triagem</button></div>
 
         <div className="mb-7 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-line bg-white p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-muted">Aguardando</span><div className="rounded-lg bg-slate-100 p-2 text-muted"><${Clock3} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums">${documents.filter(doc => doc.status === 'PENDING').length}</div><p className="mt-1 text-xs text-muted">Na fila durável</p></div>
-          <div className="rounded-xl border border-gold/30 bg-gold/[.055] p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-gold">Em análise</span><div className="rounded-lg bg-gold/10 p-2 text-gold"><${Sparkles} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums text-gold">${documents.filter(doc => doc.status === 'PROCESSING').length}</div><p className="mt-1 text-xs text-muted">Classificação e extração jurídica</p></div>
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-panel"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-amber-800">Pedem atenção</span><div className="rounded-lg bg-amber-100 p-2 text-amber-800"><${AlertTriangle} size=${17} /></div></div><div className="mt-3 text-3xl font-semibold tabular-nums text-amber-800">${attention.length}</div><p className="mt-1 text-xs text-muted">Conferência ou falha</p></div>
+          <div className="rounded-xl border border-line bg-white p-5 shadow-lg shadow-black/50"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-muted">Aguardando</span><div className="rounded-lg bg-slate-100 p-2 text-muted"><${Clock3} size=${17} /></div></div>${loading && !documents.length ? html`<${Skeleton} className="mt-4 h-9 w-14" />` : html`<div className="mt-3 text-3xl font-semibold tabular-nums">${documents.filter(doc => doc.status === 'PENDING').length}</div>`}<p className="mt-1 text-xs text-muted">Na fila durável</p></div>
+          <div className="rounded-xl border border-gold/30 bg-gold/[.055] p-5 shadow-lg shadow-black/50"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-gold">Em análise</span><div className="rounded-lg bg-gold/10 p-2 text-gold"><${ScannerDocument} size=${17} /></div></div>${loading && !documents.length ? html`<${Skeleton} className="mt-4 h-9 w-14" />` : html`<div className="mt-3 text-3xl font-semibold tabular-nums text-gold">${documents.filter(doc => doc.status === 'PROCESSING').length}</div>`}<p className="mt-1 text-xs text-muted">Classificação e extração jurídica</p></div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-lg shadow-black/50"><div className="flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-[.12em] text-amber-800">Pedem atenção</span><div className="rounded-lg bg-amber-100 p-2 text-amber-800"><${AlertTriangle} size=${17} /></div></div>${loading && !documents.length ? html`<${Skeleton} className="mt-4 h-9 w-14" />` : html`<div className="mt-3 text-3xl font-semibold tabular-nums text-amber-800">${attention.length}</div>`}<p className="mt-1 text-xs text-muted">Conferência ou falha</p></div>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
           <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel"><div className="flex items-center justify-between border-b border-line px-5 py-4"><div><h3 className="font-semibold">Documentos em triagem</h3><p className="mt-0.5 text-xs text-muted">Provas e documentos ainda não concluídos</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted">${cards.length}</span></div>
-            ${cards.length ? html`<div className="grid gap-3 p-4 md:grid-cols-2">${cards.map(doc => html`<article key=${doc.id} className="rounded-xl border border-line p-4 transition hover:border-cyan/60 hover:shadow-sm"><div className="flex items-start gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${fileIcon(doc.mime_type, 19)}</div><div className="min-w-0 flex-1"><button type="button" onClick=${() => onOpenDocument(doc)} className="focus-ring block max-w-full truncate text-left text-sm font-semibold hover:text-cyan-800">${doc.filename_original}</button><p className="mt-1 text-xs text-muted">${CHANNELS[doc.source_channel] || doc.source_channel} · ${relativeTime(doc.created_at)}</p></div><${StatusBadge} status=${doc.status} /></div><${ProcessSteps} status=${doc.status} />${doc.status === 'NEEDS_REVIEW' && canReview ? html`<button type="button" onClick=${onReview} className="focus-ring mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"><${ClipboardCheck} size=${15} /> Abrir conferência</button>` : null}${doc.status === 'FAILED' ? html`<p className="mt-3 line-clamp-2 text-xs text-danger">${doc.error_message || 'O processamento não pôde ser concluído.'}</p>` : null}</article>`)}</div>` : html`<div className="grid min-h-[290px] place-items-center p-8 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-50 text-emerald-600"><${CheckCircle2} size=${26} /></div><h4 className="mt-4 font-semibold">Tudo processado</h4><p className="mt-1 text-sm text-muted">Não há documentos aguardando neste momento.</p></div></div>`}
+            ${cards.length ? html`<div className="grid gap-3 p-4 md:grid-cols-2"><${AnimatePresence} initial=${false}>${cards.map((doc, index) => html`<${MotionArticle} key=${doc.id} initial=${{ opacity: 0, y: 10 }} animate=${{ opacity: 1, y: 0 }} exit=${{ opacity: 0, y: -8 }} transition=${{ delay: index * .045, duration: .24 }} className="rounded-xl border border-line p-4 transition hover:border-cyan/60 hover:shadow-sm"><div className="flex items-start gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${doc.status === 'PROCESSING' ? html`<${ScannerDocument} size=${19} />` : fileIcon(doc.mime_type, 19)}</div><div className="min-w-0 flex-1"><button type="button" onClick=${() => onOpenDocument(doc)} className="focus-ring block max-w-full truncate text-left text-sm font-semibold hover:text-cyan-800">${doc.filename_original}</button><p className="mt-1 text-xs text-muted">${CHANNELS[doc.source_channel] || doc.source_channel} · ${relativeTime(doc.created_at)}</p></div><${StatusBadge} status=${doc.status} /></div><${ProcessSteps} status=${doc.status} />${doc.status === 'NEEDS_REVIEW' && canReview ? html`<button type="button" onClick=${onReview} className="focus-ring mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100"><${ClipboardCheck} size=${15} /> Abrir conferência</button>` : null}${doc.status === 'FAILED' ? html`<p className="mt-3 line-clamp-2 text-xs text-danger">${doc.error_message || 'O processamento não pôde ser concluído.'}</p>` : null}</${MotionArticle}>`)}</${AnimatePresence}></div>` : html`<div className="grid min-h-[290px] place-items-center p-8 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-50 text-emerald-600"><${CheckCircle2} size=${26} /></div><h4 className="mt-4 font-semibold">Tudo processado</h4><p className="mt-1 text-sm text-muted">Não há documentos aguardando neste momento.</p></div></div>`}
           </div>
-          <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel"><div className="border-b border-line px-5 py-4"><h3 className="font-semibold">Concluídos recentemente</h3><p className="mt-0.5 text-xs text-muted">Últimos resultados prontos</p></div>${recent.length ? html`<div className="divide-y divide-line">${recent.map(doc => html`<button type="button" key=${doc.id} onClick=${() => onOpenDocument(doc)} className="focus-ring flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-slate-50"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><${FileCheck2} size=${17} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 text-xs text-muted">${doc.document_type || 'Documento'} · ${Math.round(doc.confidence_score * 100)}%</div></div><${ChevronRight} size=${16} className="text-slate-300" /></button>`)}</div>` : html`<div className="p-8 text-center text-sm text-muted">Nenhum resultado concluído ainda.</div>`}</div>
+          <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel"><div className="border-b border-line px-5 py-4"><h3 className="font-semibold">Concluídos recentemente</h3><p className="mt-0.5 text-xs text-muted">Últimos resultados prontos</p></div>${recent.length ? html`<div className="divide-y divide-line"><${AnimatePresence} initial=${false}>${recent.map((doc, index) => html`<${MotionButton} type="button" key=${doc.id} initial=${{ opacity: 0, y: 10 }} animate=${{ opacity: 1, y: 0 }} exit=${{ opacity: 0 }} transition=${{ delay: index * .045, duration: .24 }} onClick=${() => onOpenDocument(doc)} className="focus-ring flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-slate-50"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><${FileCheck2} size=${17} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 text-xs text-muted">${doc.document_type || 'Documento'} · ${Math.round(doc.confidence_score * 100)}%</div></div><${ChevronRight} size=${16} className="text-slate-300" /></${MotionButton}>`)}</${AnimatePresence}></div>` : html`<div className="p-8 text-center text-sm text-muted">Nenhum resultado concluído ainda.</div>`}</div>
         </div>
       </section>`;
     }
@@ -447,7 +497,7 @@
       const fields = Object.entries(document.extracted_data || {});
       return html`<div className="fixed inset-0 z-50 flex justify-end bg-ink/45 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Detalhes do documento" onMouseDown=${event => { if (event.target === event.currentTarget) onClose(); }}>
         <aside className="drawer-panel drawer-enter scrollbar-thin h-full w-[min(680px,94vw)] overflow-y-auto bg-paper shadow-float">
-          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-white/95 px-6 py-4 backdrop-blur"><div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-cyan-800">Detalhes do documento</p><h2 className="mt-1 max-w-[500px] truncate text-lg font-semibold">${document.filename_suggested || document.filename_original}</h2></div><button type="button" onClick=${onClose} aria-label="Fechar detalhes" className="focus-ring rounded-lg p-2 text-muted hover:bg-slate-100 hover:text-ink"><${X} size=${20} /></button></div>
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-[#121212]/80 px-6 py-4 backdrop-blur-md"><div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-cyan-800">Detalhes do documento</p><h2 className="mt-1 max-w-[500px] truncate text-lg font-semibold">${document.filename_suggested || document.filename_original}</h2></div><button type="button" onClick=${onClose} aria-label="Fechar detalhes" className="focus-ring rounded-lg p-2 text-muted hover:bg-slate-100 hover:text-ink"><${X} size=${20} /></button></div>
           <div className="p-6">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><${StatusBadge} status=${document.status} /><div className="flex items-center gap-2">${url ? html`<a href=${url} target="_blank" rel="noreferrer" className="focus-ring inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold hover:border-cyan"><${ExternalLink} size=${15} /> Abrir original</a><a href=${url} download=${document.filename_suggested || document.filename_original} className="focus-ring rounded-lg border border-line bg-white p-2 text-muted hover:border-cyan hover:text-ink" aria-label="Baixar original"><${Download} size=${15} /></a>` : null}</div></div>
 
@@ -481,16 +531,81 @@
         <div className="mb-4 rounded-xl border border-line bg-white p-3 shadow-panel"><div className="flex flex-wrap gap-3"><label className="relative min-w-[260px] flex-1"><span className="sr-only">Buscar documentos</span><${Search} size=${17} className="absolute left-3 top-2.5 text-muted" /><input value=${query} onInput=${e => setQuery(e.target.value)} placeholder="Buscar nome, CPF, RG, tipo…" className="focus-ring w-full rounded-lg border border-line bg-white py-2 pl-10 pr-3 text-sm outline-none" /></label><label className="relative"><span className="sr-only">Filtrar por status</span><select value=${status} onChange=${e => setStatus(e.target.value)} className="focus-ring rounded-lg border border-line bg-white px-3 py-2 pr-9 text-sm outline-none"><option value="ALL">Todos os status</option>${Object.entries(STATUS).map(([value, item]) => html`<option key=${value} value=${value}>${item.label}</option>`)}</select></label><label><span className="sr-only">Filtrar por canal</span><select value=${channel} onChange=${e => setChannel(e.target.value)} className="focus-ring rounded-lg border border-line bg-white px-3 py-2 pr-9 text-sm outline-none"><option value="ALL">Todos os canais</option>${Object.entries(CHANNELS).map(([value, label]) => html`<option key=${value} value=${value}>${label}</option>`)}</select></label></div></div>
         <div className="mb-3 flex items-center justify-between px-1 text-xs text-muted"><span><strong className="text-ink">${filtered.length}</strong> de ${documents.length} documento(s)</span>${(query || status !== 'ALL' || channel !== 'ALL') ? html`<button type="button" onClick=${clearFilters} className="focus-ring font-semibold text-cyan-800">Limpar filtros</button>` : null}</div>
         <div className="overflow-x-auto rounded-xl border border-line bg-white shadow-panel"><table className="w-full min-w-[900px] border-collapse text-left"><thead><tr className="border-b border-line bg-slate-50 text-xs font-bold uppercase tracking-[.1em] text-muted"><th className="px-5 py-3.5">Documento</th><th className="px-4 py-3.5">Origem</th><th className="px-4 py-3.5">Tipo</th><th className="px-4 py-3.5">Confiança</th><th className="px-4 py-3.5">Status</th><th className="px-4 py-3.5">Recebido</th><th className="w-12"><span className="sr-only">Ações</span></th></tr></thead><tbody className="divide-y divide-line">
-          ${filtered.length ? filtered.map(doc => html`<tr key=${doc.id} onClick=${() => onOpen(doc)} tabIndex="0" onKeyDown=${event => { if (event.key === 'Enter') onOpen(doc); }} className="cursor-pointer outline-none transition hover:bg-slate-50 focus:bg-cyan/5"><td className="px-5 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${fileIcon(doc.mime_type, 18)}</div><div className="min-w-0"><div className="max-w-[280px] truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 max-w-[280px] truncate text-xs text-muted">${doc.filename_original} · ${formatBytes(doc.size_bytes)}</div></div></div></td><td className="px-4 py-4 text-sm text-muted">${CHANNELS[doc.source_channel] || doc.source_channel}</td><td className="px-4 py-4 text-sm">${doc.document_type || '—'}</td><td className="px-4 py-4"><div className="flex items-center gap-2"><div className="h-1.5 w-14 overflow-hidden rounded-full bg-slate-100"><div className=${`h-full rounded-full ${doc.confidence_score >= .85 ? 'bg-emerald-500' : 'bg-amber'}`} style=${{ width: `${Math.round(doc.confidence_score * 100)}%` }}></div></div><span className="text-xs font-semibold tabular-nums">${doc.confidence_score ? `${Math.round(doc.confidence_score * 100)}%` : '—'}</span></div></td><td className="px-4 py-4"><${StatusBadge} status=${doc.status} /></td><td className="px-4 py-4 text-xs text-muted">${formatDate(doc.created_at)}</td><td className="px-4 py-4">${doc.status === 'FAILED' && canAdmin ? html`<button type="button" title="Tentar novamente" aria-label="Tentar processar novamente" onClick=${event => retry(event, doc.id)} className="focus-ring rounded-md p-2 text-muted hover:bg-cyan/10 hover:text-cyan-700"><${RotateCcw} size=${16} /></button>` : html`<${ChevronRight} size=${16} className="text-slate-300" />`}</td></tr>`) : html`<tr><td colSpan="7" className="px-5 py-16 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-muted"><${Search} size=${22} /></div><h3 className="mt-3 text-sm font-semibold">Nenhum documento encontrado</h3><p className="mt-1 text-xs text-muted">Ajuste os termos ou remova os filtros.</p></td></tr>`}
+          <${AnimatePresence} initial=${false}>${filtered.length ? filtered.map((doc, index) => html`<${MotionTr} key=${doc.id} initial=${{ opacity: 0, y: 10 }} animate=${{ opacity: 1, y: 0 }} exit=${{ opacity: 0, y: -6 }} transition=${{ delay: Math.min(index, 12) * .035, duration: .22 }} onClick=${() => onOpen(doc)} tabIndex="0" onKeyDown=${event => { if (event.key === 'Enter') onOpen(doc); }} className="cursor-pointer outline-none transition hover:bg-slate-50 focus:bg-cyan/5"><td className="px-5 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-muted">${doc.status === 'PROCESSING' ? html`<${ScannerDocument} size=${18} />` : fileIcon(doc.mime_type, 18)}</div><div className="min-w-0"><div className="max-w-[280px] truncate text-sm font-semibold">${doc.filename_suggested || doc.filename_original}</div><div className="mt-0.5 max-w-[280px] truncate text-xs text-muted">${doc.filename_original} · ${formatBytes(doc.size_bytes)}</div></div></div></td><td className="px-4 py-4 text-sm text-muted">${CHANNELS[doc.source_channel] || doc.source_channel}</td><td className="px-4 py-4 text-sm">${doc.document_type || '—'}</td><td className="px-4 py-4"><div className="flex items-center gap-2"><div className="h-1.5 w-14 overflow-hidden rounded-full bg-slate-100"><div className=${`h-full rounded-full ${doc.confidence_score >= .85 ? 'bg-emerald-500' : 'bg-amber'}`} style=${{ width: `${Math.round(doc.confidence_score * 100)}%` }}></div></div><span className="text-xs font-semibold tabular-nums">${doc.confidence_score ? `${Math.round(doc.confidence_score * 100)}%` : '—'}</span></div></td><td className="px-4 py-4"><${StatusBadge} status=${doc.status} /></td><td className="px-4 py-4 text-xs text-muted">${formatDate(doc.created_at)}</td><td className="px-4 py-4">${doc.status === 'FAILED' && canAdmin ? html`<button type="button" title="Tentar novamente" aria-label="Tentar processar novamente" onClick=${event => retry(event, doc.id)} className="focus-ring rounded-md p-2 text-muted hover:bg-cyan/10 hover:text-cyan-700"><${RotateCcw} size=${16} /></button>` : html`<${ChevronRight} size=${16} className="text-slate-300" />`}</td></${MotionTr}>`) : html`<tr><td colSpan="7" className="px-5 py-16 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-muted"><${Search} size=${22} /></div><h3 className="mt-3 text-sm font-semibold">Nenhum documento encontrado</h3><p className="mt-1 text-xs text-muted">Ajuste os termos ou remova os filtros.</p></td></tr>`}</${AnimatePresence}>
         </tbody></table></div>
       </section>`;
     }
 
-    function SignInGate({ loading, error, onSignIn }) {
-      return html`<main className="grid min-h-screen place-items-center bg-deep p-6"><section className="w-full max-w-md rounded-2xl border border-gold/20 bg-surface p-9 text-center shadow-float"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-xl border border-gold/35 bg-gold/[.08] text-gold"><${ShieldCheck} size=${25} /></div><p className="text-[9px] font-bold uppercase tracking-[.24em] text-gold">Ambiente jurídico protegido</p><h1 className="mt-3 text-2xl font-semibold text-[#ECE9E2]">DOC Intelligence</h1><p className="mt-3 text-sm leading-6 text-muted">Acesse com sua identidade individual para anexar, conferir e localizar documentos processuais.</p>${error ? html`<div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-danger">${error}</div>` : null}<button onClick=${onSignIn} disabled=${loading} className="focus-ring mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gold px-5 py-3 text-xs font-extrabold text-[#121212] transition hover:bg-[#E3C55C] disabled:opacity-50"><${loading ? LoaderCircle : LogIn} className=${loading ? 'spin' : ''} size=${17} /> ${loading ? 'Validando credenciais…' : 'Acessar ambiente seguro'}</button></section></main>`;
+    const DATA_PARTICLES = [
+      { left: '9%', top: '16%', size: 6, dx: 54, dy: 24, duration: 7.5 },
+      { left: '22%', top: '72%', size: 10, dx: -34, dy: -58, duration: 9 },
+      { left: '34%', top: '35%', size: 5, dx: 68, dy: -26, duration: 8.2 },
+      { left: '47%', top: '82%', size: 7, dx: 42, dy: -48, duration: 10.5 },
+      { left: '58%', top: '19%', size: 9, dx: -44, dy: 42, duration: 8.8 },
+      { left: '72%', top: '61%', size: 5, dx: 40, dy: 34, duration: 7.8 },
+      { left: '84%', top: '29%', size: 8, dx: -56, dy: 54, duration: 9.6 },
+      { left: '91%', top: '78%', size: 5, dx: -32, dy: -46, duration: 8.4 }
+    ];
+
+    function LoginPage({ loading, error, onLogin }) {
+      const [savedUser, setSavedUser] = useState(() => readStoredJson('savedUser'));
+      const [email, setEmail] = useState(savedUser?.email || '');
+      const [password, setPassword] = useState('');
+      const [remember, setRemember] = useState(Boolean(savedUser));
+      const [showPassword, setShowPassword] = useState(false);
+      const [formError, setFormError] = useState('');
+      const displayName = savedUser?.name || 'Usuário';
+
+      const submit = async event => {
+        event.preventDefault();
+        setFormError('');
+        const loginEmail = savedUser?.email || email.trim();
+        if (!loginEmail || !password) { setFormError('Informe suas credenciais para continuar.'); return; }
+        try { await onLogin({ email: loginEmail, password, remember, savedUser }); }
+        catch (loginError) { setFormError(loginError.message); }
+      };
+
+      const forgetSavedUser = () => {
+        localStorage.removeItem('savedUser');
+        setSavedUser(null); setEmail(''); setPassword(''); setRemember(false); setFormError('');
+      };
+
+      return html`<main className="grid min-h-screen bg-[#121212] lg:grid-cols-2">
+        <section className="login-visual relative isolate flex min-h-[50vh] overflow-hidden border-b border-gold/10 bg-[#0D0D0D] px-8 py-12 lg:min-h-screen lg:border-b-0 lg:border-r lg:px-14 lg:py-16">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_24%_20%,rgba(212,175,55,.12),transparent_28rem),linear-gradient(135deg,transparent_20%,rgba(212,175,55,.025)_50%,transparent_75%)]"></div>
+          <div className="absolute inset-0 opacity-25" style=${{ backgroundImage: 'linear-gradient(rgba(212,175,55,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(212,175,55,.08) 1px,transparent 1px)', backgroundSize: '52px 52px', maskImage: 'linear-gradient(to bottom right,black,transparent 78%)' }}></div>
+          ${DATA_PARTICLES.map((particle, index) => html`<${MotionDiv} key=${index} className="absolute rounded-sm border border-gold/55 bg-gold/10 shadow-[0_0_14px_rgba(212,175,55,.16)]" style=${{ left: particle.left, top: particle.top, width: particle.size, height: particle.size }} animate=${{ x: [0, particle.dx, -particle.dx * .35, 0], y: [0, particle.dy, -particle.dy * .45, 0], rotate: [0, 90, 180, 360], opacity: [.28, .8, .4, .28] }} transition=${{ duration: particle.duration, repeat: Infinity, ease: 'easeInOut', delay: index * .24 }} />`)}
+          <${MotionDiv} className="absolute left-[13%] top-[22%] h-56 w-56 rounded-full border border-gold/10" animate=${{ scale: [1, 1.14, 1], rotate: [0, 12, 0], opacity: [.25, .5, .25] }} transition=${{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}></${MotionDiv}>
+          <${MotionDiv} className="absolute bottom-[8%] right-[5%] h-72 w-72 rotate-45 rounded-[42px] border border-gold/[.08]" animate=${{ rotate: [45, 62, 45], scale: [1, .92, 1] }} transition=${{ duration: 11, repeat: Infinity, ease: 'easeInOut' }}></${MotionDiv}>
+
+          <div className="relative z-10 flex w-full max-w-xl flex-col justify-between">
+            <div className="flex items-center gap-3"><div className="grid h-11 w-11 place-items-center rounded-xl border border-gold/40 bg-gold/10 text-gold"><${FileSearch} size=${23} /></div><div><div className="text-[9px] font-bold uppercase tracking-[.27em] text-gold/75">Núcleo documental</div><div className="mt-1 text-sm font-semibold text-[#ECE9E2]">DOC Intelligence</div></div></div>
+            <div className="my-auto py-12"><div className="mb-5 h-px w-16 bg-gold"></div><p className="text-[10px] font-bold uppercase tracking-[.25em] text-gold">Inteligência jurídica aplicada</p><h1 className="mt-5 max-w-lg text-4xl font-semibold leading-[1.13] tracking-[-.04em] text-[#F0EDE6] sm:text-5xl">Bem-vindo ao<br />DOC Intelligence,<br /><span className="text-gold">${displayName}.</span></h1><p className="mt-6 max-w-md text-sm leading-7 text-[#8F8A82]">Transforme documentos processuais em informação estruturada, auditável e pronta para a atuação jurídica.</p></div>
+            <div className="flex items-center gap-2 text-[10px] text-[#716C64]"><${ShieldCheck} size=${13} className="text-gold/65" /> Acesso individual, protegido e auditado</div>
+          </div>
+        </section>
+
+        <section className="flex min-h-[50vh] items-center justify-center bg-[#121212] px-6 py-12 sm:px-12 lg:min-h-screen">
+          <${MotionDiv} initial=${{ opacity: 0, y: 14 }} animate=${{ opacity: 1, y: 0 }} transition=${{ duration: .45 }} className="w-full max-w-md rounded-2xl border border-white/[.08] bg-[#1E1E1E] p-7 shadow-lg shadow-black/50 sm:p-9">
+            <div className="mb-8"><p className="text-[9px] font-bold uppercase tracking-[.23em] text-gold">Ambiente protegido</p><h2 className="mt-3 text-2xl font-semibold tracking-tight text-[#ECE9E2]">${savedUser ? 'Bem-vindo de volta' : 'Acesse sua conta'}</h2><p className="mt-2 text-xs leading-5 text-[#8F8A82]">${savedUser ? 'Confirme sua senha para retomar a triagem.' : 'Use sua identidade individual do escritório.'}</p></div>
+
+            ${savedUser ? html`<div className="mb-7 flex items-center gap-4 rounded-xl border border-gold/15 bg-[#181818] p-4"><div className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-gold/55 bg-gold/10 text-sm font-bold text-gold shadow-[0_0_20px_rgba(212,175,55,.08)]">${initials(savedUser.name)}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-[#ECE9E2]">${savedUser.name}</div><div className="mt-0.5 truncate text-[11px] text-[#817C73]">${savedUser.email}</div></div><button type="button" onClick=${forgetSavedUser} className="focus-ring text-[10px] font-semibold text-gold/75 transition hover:text-gold">Não é você?</button></div>` : null}
+
+            <form onSubmit=${submit} className="space-y-5" noValidate>
+              ${!savedUser ? html`<label className="block"><span className="mb-2 block text-[11px] font-semibold text-[#C8C3B9]">E-mail</span><div className="relative"><${AtSign} size=${16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#68635B]" /><input type="email" value=${email} onInput=${event => setEmail(event.target.value)} autoComplete="email" placeholder="nome@escritorio.com.br" className="focus-ring w-full rounded-xl border border-gray-700 bg-[#121212] py-3 pl-10 pr-4 text-sm text-[#E0E0E0] outline-none transition placeholder:text-[#57534D] focus:border-[#D4AF37]" /></div></label>` : null}
+              <label className="block"><span className="mb-2 block text-[11px] font-semibold text-[#C8C3B9]">Senha</span><div className="relative"><${KeyRound} size=${16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#68635B]" /><input type=${showPassword ? 'text' : 'password'} value=${password} onInput=${event => setPassword(event.target.value)} autoComplete="current-password" placeholder="Sua senha" className="focus-ring w-full rounded-xl border border-gray-700 bg-[#121212] py-3 pl-10 pr-11 text-sm text-[#E0E0E0] outline-none transition placeholder:text-[#57534D] focus:border-[#D4AF37]" /><button type="button" aria-label=${showPassword ? 'Ocultar senha' : 'Mostrar senha'} onClick=${() => setShowPassword(value => !value)} className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-[#68635B] hover:text-gold"><${showPassword ? EyeOff : Eye} size=${16} /></button></div></label>
+              ${!savedUser ? html`<label className="flex cursor-pointer items-center gap-3 text-[11px] text-[#9D988F]"><input type="checkbox" checked=${remember} onChange=${event => setRemember(event.target.checked)} className="h-4 w-4 rounded border-gray-700 bg-[#121212] accent-[#D4AF37]" /> Manter conectado</label>` : null}
+              ${(formError || error) ? html`<div role="alert" className="rounded-xl border border-red-400/20 bg-red-400/[.06] px-4 py-3 text-xs text-red-300">${formError || error}</div>` : null}
+              <${MotionButton} type="submit" disabled=${loading} whileHover=${loading ? {} : { scale: 1.015 }} whileTap=${loading ? {} : { scale: .985 }} className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] px-5 py-3.5 text-xs font-extrabold text-[#121212] shadow-[0_10px_30px_rgba(212,175,55,.14)] transition-colors hover:bg-[#E3C55C] hover:shadow-[0_12px_36px_rgba(212,175,55,.24)] disabled:cursor-not-allowed disabled:opacity-50"><${loading ? LoaderCircle : LogIn} className=${loading ? 'spin' : ''} size=${17} />${loading ? 'Validando acesso…' : 'Entrar'}</${MotionButton}>
+            </form>
+            <div className="mt-7 flex items-center justify-center gap-2 border-t border-white/[.06] pt-5 text-[10px] text-[#625E57]"><${LockKeyhole} size=${12} /> Seus dados de acesso não são registrados em logs</div>
+          </${MotionDiv}>
+        </section>
+      </main>`;
     }
 
     function App() {
+      const navigate = useNavigate();
       const [view, setView] = useState('upload');
       const [authConfig, setAuthConfig] = useState(null);
       const [manager, setManager] = useState(null);
@@ -501,13 +616,23 @@
       const [documents, setDocuments] = useState([]);
       const [summary, setSummary] = useState({ waiting: 0, claimed: 0 });
       const [loading, setLoading] = useState(false);
+      const [hasLoaded, setHasLoaded] = useState(false);
       const [serviceError, setServiceError] = useState('');
       const [selectedDocument, setSelectedDocument] = useState(null);
+      const [toasts, setToasts] = useState([]);
+      const previousStatuses = useRef(null);
       const developmentAuth = Boolean(authConfig?.auth_disabled);
       const api = useMemo(() => apiClient(accessToken, developmentAuth), [accessToken, developmentAuth]);
       const authHeaders = useMemo(() => accessToken ? { Authorization: `Bearer ${accessToken}` } : developmentAuth ? { 'X-Dev-User': 'dev.operator', 'X-Dev-Roles': 'document.submit,document.read,document.review,document.admin' } : {}, [accessToken, developmentAuth]);
       const canReview = principal?.roles?.some(role => ['document.review', 'document.admin'].includes(role));
       const canAdmin = principal?.roles?.includes('document.admin');
+
+      const dismissToast = useCallback(id => setToasts(current => current.filter(item => item.id !== id)), []);
+      const notify = useCallback((title, message) => {
+        const id = crypto.randomUUID();
+        setToasts(current => [...current.slice(-3), { id, title, message }]);
+        window.setTimeout(() => dismissToast(id), 4500);
+      }, [dismissToast]);
 
       useEffect(() => {
         let active = true;
@@ -517,8 +642,12 @@
             if (!active) return;
             setAuthConfig(config);
             if (config.auth_disabled) {
-              const devApi = apiClient(null, true);
-              setPrincipal(await devApi('/api/v1/me'));
+              const sessionToken = localStorage.getItem('token');
+              const sessionUser = readStoredJson('userData');
+              if (sessionToken && sessionUser) {
+                const devPrincipal = await apiClient(null, true)('/api/v1/me');
+                setPrincipal({ ...devPrincipal, name: sessionUser.name || devPrincipal.name, email: sessionUser.email || devPrincipal.email });
+              }
               return;
             }
             const oidc = new UserManager({
@@ -541,7 +670,16 @@
             }
             if (user && !user.expired) {
               setAccessToken(user.access_token);
-              setPrincipal(await apiClient(user.access_token)('/api/v1/me'));
+              const authenticatedPrincipal = await apiClient(user.access_token)('/api/v1/me');
+              localStorage.setItem('userData', JSON.stringify({ name: authenticatedPrincipal.name, email: authenticatedPrincipal.email }));
+              let pendingSavedUser = null;
+              try { pendingSavedUser = JSON.parse(sessionStorage.getItem('pendingSavedUser') || 'null'); }
+              catch (_) { sessionStorage.removeItem('pendingSavedUser'); }
+              if (pendingSavedUser) {
+                localStorage.setItem('savedUser', JSON.stringify({ name: authenticatedPrincipal.name, email: authenticatedPrincipal.email || pendingSavedUser.email }));
+                sessionStorage.removeItem('pendingSavedUser');
+              }
+              setPrincipal(authenticatedPrincipal);
             }
           } catch (error) { if (active) setAuthError(error.message); }
           finally { if (active) setAuthLoading(false); }
@@ -549,8 +687,39 @@
         return () => { active = false; };
       }, []);
 
-      const signIn = () => manager?.signinRedirect().catch(error => setAuthError(error.message));
-      const signOut = () => authConfig?.auth_disabled ? window.location.reload() : manager?.signoutRedirect();
+      const handleLogin = async ({ email, remember, savedUser }) => {
+        setAuthLoading(true); setAuthError('');
+        try {
+          if (!authConfig) throw new Error('A configuração de autenticação ainda está carregando.');
+          if (authConfig.auth_disabled) {
+            const devPrincipal = await apiClient(null, true)('/api/v1/me');
+            const inferredName = email.split('@')[0].split(/[._-]+/).filter(Boolean).map(part => part[0]?.toUpperCase() + part.slice(1)).join(' ') || 'Operador';
+            const userData = { name: savedUser?.name || inferredName, email };
+            localStorage.setItem('token', `development-${crypto.randomUUID()}`);
+            localStorage.setItem('userData', JSON.stringify(userData));
+            if (remember) localStorage.setItem('savedUser', JSON.stringify(userData));
+            else localStorage.removeItem('savedUser');
+            setPrincipal({ ...devPrincipal, ...userData });
+            notify('Sessão iniciada', `Bem-vindo, ${userData.name}.`);
+            navigate('/', { replace: true });
+            return;
+          }
+          if (remember) sessionStorage.setItem('pendingSavedUser', JSON.stringify({ email }));
+          await manager?.signinRedirect({ extraQueryParams: { login_hint: email } });
+        } catch (error) {
+          setAuthError(error.message);
+          throw error;
+        } finally { setAuthLoading(false); }
+      };
+
+      const handleLogout = async () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('userData');
+        setPrincipal(null); setAccessToken(null); setDocuments([]); setSummary({ waiting: 0, claimed: 0 });
+        try { await manager?.removeUser(); } catch (_) {}
+        notify('Sessão encerrada', 'Seu acesso local foi finalizado com segurança.');
+        navigate('/login', { replace: true });
+      };
 
       const refresh = useCallback(async () => {
         if (!principal) return;
@@ -562,7 +731,7 @@
           ]);
           setDocuments(list.items); setSummary(queue); setServiceError('');
         } catch (error) { setServiceError(error.message); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setHasLoaded(true); }
       }, [api, principal?.subject, canReview]);
 
       useEffect(() => { if (!principal) return; refresh(); const timer = setInterval(refresh, 5000); return () => clearInterval(timer); }, [refresh, principal?.subject]);
@@ -571,7 +740,18 @@
         const updated = documents.find(item => item.id === selectedDocument.id);
         if (updated && updated.updated_at !== selectedDocument.updated_at) setSelectedDocument(updated);
       }, [documents, selectedDocument?.id]);
-      if (!principal) return html`<${SignInGate} loading=${authLoading} error=${authError} onSignIn=${signIn} />`;
+      useEffect(() => {
+        const currentStatuses = new Map(documents.map(document => [document.id, document.status]));
+        if (previousStatuses.current) {
+          documents.filter(document => document.status === 'COMPLETED' && previousStatuses.current.get(document.id) !== 'COMPLETED').slice(0, 3).forEach(document => {
+            notify('Extração concluída', document.filename_suggested || document.filename_original);
+          });
+        }
+        previousStatuses.current = currentStatuses;
+      }, [documents]);
+
+      if (!principal) return html`<${React.Fragment}><${Routes}><${Route} path="/login" element=${html`<${LoginPage} loading=${authLoading} error=${authError} onLogin=${handleLogin} />`} /><${Route} path="*" element=${html`<${Navigate} to="/login" replace />`} /></${Routes}><${ToastStack} toasts=${toasts} dismiss=${dismissToast} /></${React.Fragment}>`;
+      if (window.location.pathname === '/login') return html`<${Navigate} to="/" replace />`;
 
       const metrics = {
         today: documents.filter(doc => new Date(doc.created_at).toDateString() === new Date().toDateString()).length,
@@ -585,23 +765,23 @@
         documents: 'Acervo processual'
       };
 
-      return html`<div className="app-shell grid min-h-screen grid-cols-[272px_1fr] bg-deep">
-        <${Sidebar} view=${view} setView=${setView} principal=${principal} onSignOut=${signOut} reviewCount=${summary.waiting} activeCount=${metrics.processing} />
+      return html`<${React.Fragment}><div className="app-shell grid min-h-screen grid-cols-[272px_1fr] bg-deep">
+        <${Sidebar} view=${view} setView=${setView} principal=${principal} onSignOut=${handleLogout} reviewCount=${summary.waiting} activeCount=${metrics.processing} />
         <main className="min-w-0">
-          <header className="border-b border-gold/10 bg-[#151515]/95 px-7 py-4 backdrop-blur-xl"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5"><div><div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[.18em] text-[#777168]"><span className=${`h-1.5 w-1.5 rounded-full ${serviceError ? 'bg-danger' : 'bg-emerald-400 shadow-[0_0_9px_rgba(52,211,153,.55)]'}`}></span>${serviceError ? 'Serviço indisponível' : 'Operação segura online'}</div><div className="mt-1.5 text-sm font-semibold text-[#D9D5CC]">${pageTitles[view]}</div></div><div className="desk-metrics grid grid-cols-3 gap-3"><${Metric} label="Recebidos hoje" value=${metrics.today} icon=${Activity} /><${Metric} label="Em triagem" value=${metrics.processing} icon=${Clock3} /><${Metric} label="Concluídos" value=${metrics.completed} icon=${CheckCircle2} /></div></div></header>
+          <header className="sticky top-0 z-10 border-b border-gold/10 bg-[#121212]/80 px-7 py-4 backdrop-blur-md"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5"><div><div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[.18em] text-[#777168]"><span className=${`h-1.5 w-1.5 rounded-full ${serviceError ? 'bg-danger' : 'bg-emerald-400 shadow-[0_0_9px_rgba(52,211,153,.55)]'}`}></span>${serviceError ? 'Serviço indisponível' : 'Operação segura online'}</div><div className="mt-1.5 text-sm font-semibold text-[#D9D5CC]">${pageTitles[view]}</div></div><div className="desk-metrics grid grid-cols-3 gap-3"><${Metric} label="Recebidos hoje" value=${metrics.today} icon=${Activity} loading=${loading && !hasLoaded} /><${Metric} label="Em triagem" value=${metrics.processing} icon=${Clock3} loading=${loading && !hasLoaded} /><${Metric} label="Concluídos" value=${metrics.completed} icon=${CheckCircle2} loading=${loading && !hasLoaded} /></div></div></header>
           ${serviceError ? html`<div className="border-b border-red-200 bg-red-50 px-7 py-2 text-center text-xs font-medium text-danger">${serviceError}. Tentaremos reconectar automaticamente.</div>` : null}
           <div className="page-pad mx-auto max-w-7xl p-7 lg:p-10">
-            ${view === 'upload' ? html`<${UploadView} api=${api} onUploaded=${refresh} onTrack=${() => setView('monitor')} />` : null}
+            ${view === 'upload' ? html`<${UploadView} api=${api} onUploaded=${refresh} onTrack=${() => setView('monitor')} notify=${notify} />` : null}
             ${view === 'monitor' ? html`<${MonitorView} documents=${documents} loading=${loading} refresh=${refresh} onOpenDocument=${setSelectedDocument} onReview=${() => setView('review')} canReview=${canReview} />` : null}
             ${view === 'review' && canReview ? html`<${ReviewView} api=${api} authHeaders=${authHeaders} principal=${principal} onChanged=${refresh} />` : null}
             ${view === 'documents' ? html`<${DocumentsView} documents=${documents} loading=${loading} api=${api} refresh=${refresh} onOpen=${setSelectedDocument} canAdmin=${canAdmin} />` : null}
           </div>
         </main>
         <${DocumentDrawer} document=${selectedDocument} authHeaders=${authHeaders} onClose=${() => setSelectedDocument(null)} />
-      </div>`;
+      </div><${ToastStack} toasts=${toasts} dismiss=${dismissToast} /></${React.Fragment}>`;
     }
 
-    createRoot(document.getElementById('root')).render(html`<${App} />`);
+    createRoot(document.getElementById('root')).render(html`<${BrowserRouter}><${App} /></${BrowserRouter}>`);
   </script>
 </body>
 </html>
